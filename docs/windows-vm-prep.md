@@ -429,10 +429,19 @@ slmgr /rearm
 Restart-Computer
 ```
 
-Each `/rearm` extends the eval by ~180 days. Windows Server 2022 grants 5
-rearms total. After reboot, `slmgr /xpr` should report
-`Initial grace period ends ...` with days remaining and the 60-min reboot
+After reboot, `slmgr /xpr` should report `Initial grace period ends ...`
+with days remaining instead of `Notification mode`, and the 60-min reboot
 cycle stops.
+
+> **How many days you'll get is unpredictable on this image.** The docs say
+> `/rearm` extends the eval by ~180 days, but in practice once an eval has
+> *already* gone past expiry into Notification mode, the rearm often only
+> restores the standard ~10-day activation grace — not the full 180.
+> Observed on Vince's VM (2026-05-24): rearm bumped expiry to 2026-06-03,
+> exactly 10 days. Verify with `slmgr /xpr` after reboot. **Functionally
+> it's enough — the reboot loop stops either way, and you have multiple
+> rearms left (5 total on Server 2022, one consumed per `/rearm`).** If
+> you need more time, rearm again before the next expiry.
 
 If rearms are exhausted, options (in rough order of pain):
 

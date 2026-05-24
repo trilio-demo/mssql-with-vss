@@ -88,7 +88,7 @@ the Windows VM).
 - [x] NodePort exposure: RDP `31211`, SSH `31256` on worker IPs (e.g. `172.31.1.56`)
 - [x] SSH Service selector fixed (`vm.kubevirt.io/name: win2k22-aqua-junglefowl-90` — prep doc YAML had used `kubevirt.io/domain: mssql-lab` which doesn't match the launcher pod's labels)
 - [x] MS SQL Developer Edition installed (**SQL Server 2025**, named instance `MSSQLSERVER01`, default instance was *not* selected) — confirmed via screenshot `collateral/MSSQL-installed-screen.png`
-- [ ] **Blocked — Windows eval expired.** Engineering golden image is Datacenter Evaluation, build `20348.fe_release.210507` (May 2021). VM force-reboots every ~61 min. Fix: `slmgr /rearm` + reboot, or upgrade to a real Datacenter/Standard key.
+- [x] **Windows eval rearmed (2026-05-24).** Engineering golden image is Datacenter Evaluation, build `20348.fe_release.210507` (May 2021). `slmgr /rearm` + reboot took the VM out of `Notification` mode; `slmgr /xpr` now shows `Initial grace period ends 6/3/2026 4:27 PM` — only ~10 days, not the documented 180 (rearm-after-expiry quirk). Reboot loop expected to be dead; verify with `oc logs -n openshift-cnv deployment/virt-controller --since=2m | grep <vm>` over the next ~70 min. 4 rearms remaining.
 - [ ] **Blocked — no data disk.** Step 3.4 (Add disk) was missed at VM creation; only the two CD-ROMs (`virtio-win` on D:, `unattendCD` on E:) are attached. SQL installed onto `C:` instead of `D:`. Fix: detach both CDs, add 40 GiB blank data disk, then move SQL data/log/backup dirs to `D:`.
 - [ ] Hostname not renamed (still `WIN-1LU5F0AC846`). Cosmetic only; skip or rename later via `Rename-Computer`.
 - [ ] SSMS install (deferred — "Install SSMS" button still on installer completion screen)
@@ -157,11 +157,12 @@ the Windows VM).
    None of these are blockers — just need awareness for the generator config.
 
 **Open items for next session (in priority order):**
-1. **RDP into the VM before the next forced reboot** and run `slmgr /xpr`
-   + `slmgr /dlv` to confirm eval state and rearm count. If rearms remain:
-   `slmgr /rearm && Restart-Computer`. If not: convert to real key or
-   rebuild the golden image. Reboot loop must be stopped before anything
-   else.
+1. **Confirm reboot loop is dead.** Quick check before doing anything else:
+   `oc logs -n openshift-cnv deployment/virt-controller --since=2h | grep win2k22-aqua-junglefowl-90`.
+   No `Stopping VM with VMI in phase Succeeded` entries since the 2026-05-24
+   rearm → loop is clean. If it reappears, rearm wasn't durable; consider
+   edition conversion. Eval grace currently ends **2026-06-03 4:27 PM**, so
+   plan to either finish the lab before then or rearm again (4 left).
 2. **Add the data disk.** Console → VM → Disks → Add disk: `data`, Blank,
    40 GiB, default SC. Stop/start VM. Detach `unattendCD` (and
    optionally `virtio-win`). PowerShell `Initialize-Disk` /
