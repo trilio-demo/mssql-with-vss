@@ -1,0 +1,11 @@
+[project]
+name = "restore-mssql-with-vss"
+version = "0.1.0"
+description = "Lab POC: Trilio for Kubernetes backing up and restoring MS SQL on OpenShift Virtualization, with QGA-driven VSS application consistency."
+requires-python = ">=3.13"
+dependencies = [
+    "pymupdf>=1.27.2.3",
+]
+
+[tool.uv]
+package = false
