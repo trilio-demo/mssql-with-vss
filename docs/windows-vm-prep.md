@@ -29,6 +29,21 @@ from engineering's **golden image**, with:
   - `px-csi-replicated` annotated as `is-default-virt-class=true`.
   - Snapshot class `px-csi-snapclass` available.
 
+> ### ⚠️ Heads-up: Windows Server evaluation clock
+>
+> The engineering golden image is a **Windows Server 2022 Datacenter
+> Evaluation** build (observed: build 20348, `fe_release.210507` from
+> 2021-05). The 180-day evaluation period starts when the image was
+> captured, **not** when you boot a clone — so the eval may already be
+> expired or close to it on first boot.
+>
+> When eval expires, Windows force-reboots **every ~60 minutes**. Under
+> `runStrategy: Always` this looks like a KubeVirt restart loop in the
+> `virt-controller` logs (VMI moves to `Succeeded` ~1h after each start),
+> but the trigger is inside Windows, not KubeVirt.
+>
+> Check and remediate on first boot (§ 4f below).
+
 ---
 
 ## 1. Upload the golden image as a DataVolume
@@ -93,12 +108,21 @@ In the OCP Console:
    VirtualMachine*.
 2. **Project / Namespace:** `mssql-vss-lab`.
 3. **CPU / Memory:** 4 vCPU, 8 GB RAM.
-4. **Disks:** keep the default boot disk, then **Add disk**:
+4. **Disks: this step is mandatory — don't skip.** Keep the default boot
+   disk, then **Add disk** (the form section is at the bottom of the page;
+   easy to miss):
    - Name: `data`
    - Source: Blank
    - Size: **40 GiB**
    - StorageClass: leave as default (picks up `px-csi-replicated`).
    - Type: Disk (block / virtio).
+
+   > If you forgot this and the VM is already created, you can add it
+   > post-create: Console → your VM → **Disks** tab → **Add disk** with the
+   > same fields. Stop/start the VM after attaching (some attach flows are
+   > hot-add capable but it's cleaner to cycle). The post-boot RAW-disk
+   > format step in § 4b silently no-ops if no spare disk is present, so
+   > the absence is easy to miss until you try to install SQL on `D:`.
 5. Click **Customize VirtualMachine**.
 6. **Scripts** tab → **Sysprep** → paste the unattend XML below.
 7. **Untick "Start this VirtualMachine after creation"** so you can adjust
@@ -206,16 +230,35 @@ Status: `Running`, StartType: `Automatic`. **If it's not running, stop here
 and figure out why.** No QGA → no VSS coordination → no application-consistent
 backup. The golden image should have it pre-installed.
 
-### 4b. Initialize and format the data disk
+### 4b. Clear the CD drives and format the data disk
 
-The OCPv catalog template attaches a **virtio-win drivers CD-ROM** as a
-containerDisk (Balloon, NetKVM, viostor, vioscsi, etc.). Windows grabs the
-first free letter for it — usually `D:` — before our data disk is online.
-Reassign it to `X:` first so `D:` is free for the data disk:
+The OCPv catalog template attaches **two CD-ROMs** to the VM:
+
+- `virtio-win-*` (containerDisk) — Balloon / NetKVM / viostor / vioscsi
+  drivers. Already installed by Sysprep; the CD is dead weight after first boot.
+- `unattendCD` — the Sysprep `unattend.xml` you pasted in § 3. Only consumed
+  on first boot.
+
+Windows grabs the first two free letters for them — observed: `D:` =
+virtio-win, `E:` = unattendCD. That eats the letter we want for the data
+disk. Clear them out:
+
+**Option A (clean):** detach both CDs from the VM via Console → your VM →
+**Disks** tab → kebab on `virtio-win` and `unattendCD` rows → **Detach**.
+This frees `D:` and `E:` permanently and removes installer noise. Recommended
+once first boot is done.
+
+**Option B (rename only):** if you'd rather keep the CDs attached, move
+their drive letters out of the way from PowerShell:
 
 ```powershell
+# Move the virtio-win CD out of D:
 Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter='D:'" |
   Set-CimInstance -Property @{DriveLetter='X:'}
+
+# Move the unattendCD out of E: (optional — only matters if you want E: free)
+Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter='E:'" |
+  Set-CimInstance -Property @{DriveLetter='Y:'}
 ```
 
 Then initialize and format the data disk:
@@ -227,7 +270,12 @@ Get-Disk | Where-Object PartitionStyle -eq 'RAW' |
   Format-Volume -FileSystem NTFS -NewFileSystemLabel "Data" -Confirm:$false
 ```
 
-`D:` should now exist and be empty (and the virtio CD lives on `X:`).
+> **No output / nothing happened?** `Get-Disk | Where-Object PartitionStyle
+> -eq 'RAW'` silently returns nothing if there is no spare disk — meaning
+> step 3.4 (Add disk) was skipped. Verify in **This PC** that `D:` exists
+> after the format; if not, go back and attach the 40 GiB blank disk.
+
+`D:` should now exist and be empty.
 
 ### 4c. Set hostname (forces a reboot)
 
@@ -324,6 +372,51 @@ Restart-Service sshd
 
 Password auth also works if you'd rather skip keys for the lab.
 
+### 4f. Windows activation status (do this before SQL install)
+
+The engineering golden image is **Datacenter Evaluation**. The 180-day eval
+clock started when the image was captured (build observed:
+`20348.fe_release.210507` — May 2021), not when you cloned it. The eval may
+already be expired on first boot.
+
+Check immediately after Sysprep finishes:
+
+```powershell
+slmgr /xpr    # "permanently activated" / "in notification mode" / "expired"
+slmgr /dlv    # verbose — edition, eval days remaining, rearm count remaining
+```
+
+**Symptom of expired eval:** Windows force-reboots **every ~60 minutes**.
+Under KubeVirt's `runStrategy: Always`, the VMI cycles between phases
+`Running` → `Succeeded` → relaunch on a ~1-hour cadence. Visible in
+`virt-controller` logs:
+
+```bash
+oc logs -n openshift-cnv deployment/virt-controller -f \
+  | grep "<your-vm-name>"
+```
+
+Pattern in the log: `Stopping VM with VMI in phase Succeeded` → ~35s gap →
+`Starting VM due to runStrategy: Always`, repeating every ~61 min.
+
+**Remediate:**
+
+```powershell
+slmgr /rearm        # extends eval by 180 days (limited rearms — slmgr /dlv shows remaining)
+Restart-Computer
+```
+
+If rearms are exhausted, options (in rough order of pain):
+
+- Convert eval → retail with a real Datacenter/Standard key:
+  `dism /online /set-edition:ServerStandard /productkey:XXXXX-XXXXX-XXXXX-XXXXX-XXXXX /accepteula`
+- Point at a KMS/activation server you have access to.
+- Rebuild the engineering golden image from a fresher Windows Server 2022 ISO.
+
+> Once activation is healthy, the 60-min reboot loop stops cleanly — no
+> KubeVirt-side patching needed. Do this **before** the SQL install or the
+> install can be interrupted mid-flight by the next forced reboot.
+
 ## 5. Expose RDP and SSH from the cluster
 
 **Easiest:** in the OCP Console, **Virtualization → VirtualMachines →
@@ -400,13 +493,22 @@ Free, full-feature, non-production EULA. No license key, no activation.
 2. Run setup inside the VM (RDP in for the GUI):
    - **New SQL Server stand-alone installation**.
    - **Database Engine Services** feature.
-   - **Default instance** (`MSSQLSERVER`).
+   - **Default instance** (`MSSQLSERVER`) is preferred for this lab — keeps
+     connection strings short (`sqlcmd -S .`) and matches the Python
+     generator config. **If the installer hands you a named instance**
+     (e.g. `MSSQLSERVER01`), that's fine functionally but every connection
+     string downstream needs `<host>\MSSQLSERVER01` instead of just `<host>`.
+     Note the instance name shown on the "Installation has completed
+     successfully" screen — we'll need it for the Python generator.
    - **Mixed Mode** auth. Strong `sa` password. Add Administrator as a SQL admin.
    - **Data directories:** point everything at `D:\` —
      `D:\MSSQL\Data`, `D:\MSSQL\Log`, `D:\MSSQL\Backup`. Keeps the FLR story
-     clean (SQL files live on the data disk, not `C:`).
+     clean (SQL files live on the data disk, not `C:`). **If `D:` doesn't
+     exist yet**, go back to § 3.4 / § 4b — the SQL data dirs on `C:` muddy
+     the per-volume snapshot story.
 3. Install **SSMS** (Management Studio) separately — also free, link on the
-   same page.
+   same page (there's also an "Install SSMS" shortcut button on the SQL
+   installer's completion screen).
 4. Verify the **VSS Writer** service:
 
    ```powershell
@@ -416,26 +518,38 @@ Free, full-feature, non-production EULA. No license key, no activation.
    Status: `Running`, StartType: `Automatic` (default). **This is the writer
    QGA's freeze signal will engage.**
 
-5. Sanity check the engine:
+5. Sanity check the engine. Pick the form that matches your install:
 
    ```powershell
+   # Default instance (MSSQLSERVER)
    sqlcmd -S . -E -Q "SELECT @@VERSION;"
+
+   # Named instance (e.g. MSSQLSERVER01)
+   sqlcmd -S .\MSSQLSERVER01 -E -Q "SELECT @@VERSION;"
    ```
 
-   Should return a Developer Edition banner.
+   Should return a Developer Edition banner. **If `sqlcmd -S .` returns
+   "Login timeout expired" / "named pipes provider" error**, you almost
+   certainly have a named instance — use the `.\<INSTANCE_NAME>` form.
 
 ## 7. Done-state checklist
 
-- [ ] VM running on `ocp-px` in `mssql-vss-lab`, Windows Server 2022, hostname `mssql-lab`.
-- [ ] `D:` data disk formatted, empty, ready for SQL data files.
+- [ ] VM running on `ocp-px` in `mssql-vss-lab`, Windows Server 2022 (hostname
+      `mssql-lab` if you ran the rename; the Sysprep-generated `WIN-XXXXXXXX`
+      is functionally fine too).
+- [ ] `slmgr /xpr` reports healthy activation (not "expired", not "notification
+      mode") — no 60-minute reboot loop.
+- [ ] `D:` data disk formatted, empty, ready for SQL data files (CDs detached
+      or moved off `D:`/`E:`).
 - [ ] `Get-Service QEMU-GA` → `Running`.
 - [ ] RDP works from your Mac (port 3389 reachable, can log in as Administrator).
 - [ ] `ssh administrator@<vm-endpoint>` works from your Mac (lands in PowerShell).
 - [ ] `Get-Service SQLWriter` → `Running`.
-- [ ] `sqlcmd -S . -E -Q "SELECT @@VERSION;"` returns a Developer Edition banner.
+- [ ] `sqlcmd -S . -E -Q "SELECT @@VERSION;"` (or `-S .\<INSTANCE>` for a
+      named instance) returns a Developer Edition banner.
 - [ ] Note the access path (direct? VPN? jump host?) so we can wire up
       `~/.ssh/config` if needed.
 
-When all eight boxes are checked, ping me — next session configures the
+When all nine boxes are checked, ping me — next session configures the
 Trilio backup target, writes the Python generator (`pyodbc`), and runs the
 first backup.

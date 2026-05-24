@@ -87,8 +87,12 @@ the Windows VM).
 - [x] QGA verified running, RDP enabled, OpenSSH Server installed and running (password auth)
 - [x] NodePort exposure: RDP `31211`, SSH `31256` on worker IPs (e.g. `172.31.1.56`)
 - [x] SSH Service selector fixed (`vm.kubevirt.io/name: win2k22-aqua-junglefowl-90` — prep doc YAML had used `kubevirt.io/domain: mssql-lab` which doesn't match the launcher pod's labels)
-- [ ] **In progress (between sessions):** Vince installing MS SQL Developer + SSMS, data disk format + hostname rename + SQL data dirs on `D:`
-- [ ] Verify done-state: `SQLWriter` running, `sqlcmd` banner returns Developer Edition
+- [x] MS SQL Developer Edition installed (**SQL Server 2025**, named instance `MSSQLSERVER01`, default instance was *not* selected) — confirmed via screenshot `collateral/MSSQL-installed-screen.png`
+- [ ] **Blocked — Windows eval expired.** Engineering golden image is Datacenter Evaluation, build `20348.fe_release.210507` (May 2021). VM force-reboots every ~61 min. Fix: `slmgr /rearm` + reboot, or upgrade to a real Datacenter/Standard key.
+- [ ] **Blocked — no data disk.** Step 3.4 (Add disk) was missed at VM creation; only the two CD-ROMs (`virtio-win` on D:, `unattendCD` on E:) are attached. SQL installed onto `C:` instead of `D:`. Fix: detach both CDs, add 40 GiB blank data disk, then move SQL data/log/backup dirs to `D:`.
+- [ ] Hostname not renamed (still `WIN-1LU5F0AC846`). Cosmetic only; skip or rename later via `Rename-Computer`.
+- [ ] SSMS install (deferred — "Install SSMS" button still on installer completion screen)
+- [ ] Verify done-state once unblocked: `SQLWriter` running, `sqlcmd -S .\MSSQLSERVER01` returns Developer Edition banner
 - [x] SSH public-key auth working — root cause was `administrators_authorized_keys` written as UTF-16 LE + BOM (PowerShell/editor default); rewritten as plain ASCII via `[System.IO.File]::WriteAllText(..., [System.Text.Encoding]::ASCII)`. Fix + verification baked into `docs/windows-vm-prep.md` § 4e.
 - [ ] Configure Trilio backup target on `ocp-px`
 - [ ] Write Python write generator (continuous INSERTs into `demo_db`)
@@ -105,7 +109,75 @@ the Windows VM).
 ## Session State
 *(Updated at end of each session — read at start of each new session.)*
 
-### Last session: 2026-05-06 (bootstrap)
+### Last session: 2026-05-24 (SSH key fix + repo ship + post-SQL-install diagnostics)
+
+**Accomplished:**
+- **SSH public-key auth fixed.** Root cause: `administrators_authorized_keys`
+  was being written by PowerShell/editor defaults as **UTF-16 LE + BOM**;
+  OpenSSH silently rejects that and falls back to password auth. Fix is to
+  write the file via
+  `[System.IO.File]::WriteAllText(..., $key.Trim() + "`n", [System.Text.Encoding]::ASCII)`
+  and verify with `Format-Hex` (first bytes should be `73 73 68`, not
+  `FF FE`). Procedure + verification baked into `docs/windows-vm-prep.md` § 4e.
+- **Bootstrap step 13 completed: repo shipped.**
+  → **https://github.com/trilio-demo/mssql-with-vss** (public).
+  - Removed bootstrap artifacts (`CLAUDE.md.template`,
+    `project-bootstrap-process.md`, three `.gitkeep`s).
+  - Added `README.md`, added `.claude/` to `.gitignore`.
+  - Reset history, fresh `git init`, single clean initial commit.
+- **Vince installed MS SQL between sessions.** Reviewed evidence in
+  `collateral/`: install screenshot, drive-list screenshot, config notes,
+  `virt-controller` reboot logs. Three issues identified — see **Known
+  issues** below.
+- **`docs/windows-vm-prep.md` updated** with all three findings:
+  - § Prerequisites: callout that engineering's golden image is **Datacenter
+    Evaluation** and the 180-day clock started at image-capture, not boot.
+  - § 3.4: data disk is mandatory, easy to miss; documented how to add
+    post-create.
+  - § 4b: rewritten — the catalog template attaches **two** CD-ROMs
+    (`virtio-win` + `unattendCD`), not one. Detach both (preferred) or
+    rename letters out of `D:`/`E:`.
+  - § 4f (new): Windows activation check + `slmgr /rearm` recipe + how to
+    recognize the 60-minute reboot loop in `virt-controller` logs.
+  - § 6: default vs named instance — `sqlcmd -S .` vs `sqlcmd -S .\<INSTANCE>`.
+  - § 7 done-state checklist: added activation-status row, clarified CDs.
+
+**Known issues identified end-of-session (parked for tomorrow):**
+1. **Windows eval expired → 60-min reboot loop.** `virt-controller` logs
+   show VMI cycling `Running` → `Succeeded` → relaunch on a ~61-minute
+   cadence (timestamps 17:39 / 18:40 / 19:41 ...). Classic Windows Server
+   eval-expired forced-reboot signature.
+2. **No data disk.** Only the two CD-ROMs are attached
+   (D: `virtio-win-1.9.46`, E: `unattendCD`). SQL installed onto `C:` —
+   muddies the FLR story.
+3. **Install drift vs prep doc.** Vince got SQL **2025** Developer Edition
+   with **named instance `MSSQLSERVER01`** (not default `MSSQLSERVER`).
+   Connection string: `Server=localhost\MSSQLSERVER01;...`. Hostname is
+   still the Sysprep-generated `WIN-1LU5F0AC846` (rename step was skipped).
+   None of these are blockers — just need awareness for the generator config.
+
+**Open items for next session (in priority order):**
+1. **RDP into the VM before the next forced reboot** and run `slmgr /xpr`
+   + `slmgr /dlv` to confirm eval state and rearm count. If rearms remain:
+   `slmgr /rearm && Restart-Computer`. If not: convert to real key or
+   rebuild the golden image. Reboot loop must be stopped before anything
+   else.
+2. **Add the data disk.** Console → VM → Disks → Add disk: `data`, Blank,
+   40 GiB, default SC. Stop/start VM. Detach `unattendCD` (and
+   optionally `virtio-win`). PowerShell `Initialize-Disk` /
+   `New-Partition -DriveLetter D` / `Format-Volume`.
+3. **Move SQL data dirs to `D:`.** `ALTER DATABASE master MODIFY FILE …`
+   for system DBs, or detach/move/attach for user DBs. Restart the
+   `MSSQL$MSSQLSERVER01` service. Re-verify `Get-Service SQLWriter`.
+4. **Install SSMS** (deferred from this session).
+5. **Configure Trilio backup target on `ocp-px`** — pick S3 vs NFS,
+   confirm TVK namespace, set up target Secret + `Target` CR.
+6. **Write the Python generator** (`src/write_generator.py`):
+   `uv add pyodbc`, continuous INSERT loop into `demo_db`, package for
+   the Windows VM (uv-on-Windows + MS ODBC Driver 18). Connection string
+   must use `localhost\MSSQLSERVER01`.
+
+### Previous session: 2026-05-06 (bootstrap)
 **Accomplished:**
 - Read conversation (`collateral/City-of-Delray-Beach-VSS-with-Trilio.md`)
   and customer environment notes (`collateral/about-City-of-Delray-Beach.txt`).
@@ -168,25 +240,5 @@ the Windows VM).
 - Reach from Mac: RDP `172.31.1.56:31211`, SSH `administrator@172.31.1.56 -p 31256` (password auth).
 - Vince running MS SQL install + post-config between sessions.
 
-**Open items for next session:**
-1. Confirm SQL Developer + SSMS installed; `Get-Service SQLWriter` Running;
-   `sqlcmd -S . -E -Q "SELECT @@VERSION;"` returns Developer Edition banner.
-2. Configure Trilio backup target on `ocp-px` — pick S3 vs NFS, confirm
-   which TVK namespace owns it, set up the target Secret + `Target` CR.
-3. Add `pyodbc` dependency, write `src/write_generator.py` (continuous
-   INSERT loop into `demo_db`), package it for the Windows VM (uv on Windows
-   plus the MS ODBC Driver 18 install).
-4. Run first end-to-end backup; capture VSS freeze/thaw events from Windows
-   Event Viewer (`OpenSSH/Operational`-equivalent for VSS — sources `VSS`
-   and `SQLWriter`) into `output/`.
-5. ~~(Deferred) Fix SSH public-key auth~~ — **done 2026-05-24.** UTF-16 LE
-   BOM was the culprit; rewrite as ASCII via
-   `[System.IO.File]::WriteAllText(..., [System.Text.Encoding]::ASCII)`.
-   Procedure + `Format-Hex` verification step are in `docs/windows-vm-prep.md` § 4e.
-
-**Next session should:**
-- Verify access to the prepped VM (RDP and SSH both).
-- Install MS SQL Developer Edition + SSMS, verify `SQLWriter` service running.
-- Install Trilio operator on `ocp-dev`, configure backup target.
-- Write the Python generator (`src/write_generator.py`), add `pyodbc`
-  dependency via `uv add pyodbc`.
+*(The 2026-05-08 open-items list has been superseded by the 2026-05-24
+entry at the top of this Session State.)*
