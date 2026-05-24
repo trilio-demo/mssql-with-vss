@@ -98,7 +98,7 @@ the Windows VM).
 - [ ] (Negative control, optional) Repeat backup with QGA stopped — show crash-consistent gap
 - [ ] Bundle evidence in `output/` for the blog-writing agent
 - [ ] Draft customer-facing technical response to Erick
-- [ ] Finalize and ship the repo (bootstrap step 13) — deferred until after first lab run
+- [x] Repo shipped (bootstrap step 13): **https://github.com/trilio-demo/mssql-with-vss** (public, 2026-05-24)
 
 ---
 
