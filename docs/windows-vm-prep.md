@@ -379,17 +379,38 @@ clock started when the image was captured (build observed:
 `20348.fe_release.210507` — May 2021), not when you cloned it. The eval may
 already be expired on first boot.
 
-Check immediately after Sysprep finishes:
+Check immediately after Sysprep finishes.
+
+> **`slmgr` over SSH (or any PowerShell session) returns no output by
+> default.** `slmgr.vbs` is a VBScript that defaults to `wscript.exe`, which
+> renders results as GUI popup dialogs — visible on the Windows desktop,
+> invisible to an SSH session. Switch the default script host to `cscript`
+> once per machine so output goes to stdout:
+>
+> ```powershell
+> cscript //nologo //h:cscript //s
+> # "Command line options are saved. The default script host is now set to cscript.exe."
+> ```
+>
+> After this, `slmgr /xpr` and `slmgr /dlv` work normally in any shell.
+> (Alternative: call `cscript //nologo C:\Windows\System32\slmgr.vbs /xpr`
+> explicitly each time.)
 
 ```powershell
-slmgr /xpr    # "permanently activated" / "in notification mode" / "expired"
-slmgr /dlv    # verbose — edition, eval days remaining, rearm count remaining
+slmgr /xpr    # "permanently activated" / "in notification mode" / "initial grace period ends ..."
+slmgr /dlv    # verbose — License Status, Notification Reason, rearm count
 ```
 
-**Symptom of expired eval:** Windows force-reboots **every ~60 minutes**.
-Under KubeVirt's `runStrategy: Always`, the VMI cycles between phases
-`Running` → `Succeeded` → relaunch on a ~1-hour cadence. Visible in
-`virt-controller` logs:
+**Expired-eval signature in `slmgr /dlv`:**
+
+```
+License Status: Notification
+Notification Reason: 0xC004F009 (grace time expired).
+Remaining Windows rearm count: 5
+```
+
+`License Status: Notification` + `0xC004F009` is the smoking gun. The
+matching cluster-side symptom is the 60-minute reboot loop:
 
 ```bash
 oc logs -n openshift-cnv deployment/virt-controller -f \
@@ -397,14 +418,21 @@ oc logs -n openshift-cnv deployment/virt-controller -f \
 ```
 
 Pattern in the log: `Stopping VM with VMI in phase Succeeded` → ~35s gap →
-`Starting VM due to runStrategy: Always`, repeating every ~61 min.
+`Starting VM due to runStrategy: Always`, repeating every ~61 min. Windows
+is force-rebooting; KubeVirt sees the clean shutdown as `Succeeded` and
+relaunches under `runStrategy: Always`.
 
-**Remediate:**
+**Remediate (if `Remaining Windows rearm count` > 0):**
 
 ```powershell
-slmgr /rearm        # extends eval by 180 days (limited rearms — slmgr /dlv shows remaining)
+slmgr /rearm
 Restart-Computer
 ```
+
+Each `/rearm` extends the eval by ~180 days. Windows Server 2022 grants 5
+rearms total. After reboot, `slmgr /xpr` should report
+`Initial grace period ends ...` with days remaining and the 60-min reboot
+cycle stops.
 
 If rearms are exhausted, options (in rough order of pain):
 
@@ -413,9 +441,8 @@ If rearms are exhausted, options (in rough order of pain):
 - Point at a KMS/activation server you have access to.
 - Rebuild the engineering golden image from a fresher Windows Server 2022 ISO.
 
-> Once activation is healthy, the 60-min reboot loop stops cleanly — no
-> KubeVirt-side patching needed. Do this **before** the SQL install or the
-> install can be interrupted mid-flight by the next forced reboot.
+> Do this **before** the SQL install — otherwise the next forced reboot
+> can interrupt setup mid-flight.
 
 ## 5. Expose RDP and SSH from the cluster
 
