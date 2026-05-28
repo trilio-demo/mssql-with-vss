@@ -1,0 +1,19 @@
+apiVersion: triliovault.trilio.io/v1
+kind: Restore
+metadata:
+  # generateName so we can re-run without renaming; suffix becomes the run ID.
+  generateName: mssql-vss-restore-
+  namespace: mssql-vss-restore
+spec:
+  restoreFlags:
+    skipIfAlreadyExists: true
+  source:
+    type: Location
+    # Location of mssql-vss-backup-2phcr on sa-nfs-cr-demo (captured from
+    # `oc get backup mssql-vss-backup-2phcr -n mssql-vss-lab -o jsonpath='{.status.location}'`)
+    location: f0c1db45-c27b-4c77-bc03-ab5565ad738d/abe56a06-0e54-4c53-b6a4-06c9a0a79031
+    target:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Target
+      name: sa-nfs-cr-demo
+      namespace: trilio-system

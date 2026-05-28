@@ -1,0 +1,33 @@
+apiVersion: triliovault.trilio.io/v1
+kind: BackupPlan
+metadata:
+  name: mssql-vss-backupplan
+  namespace: mssql-vss-lab
+spec:
+  backupConfig:
+    target:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Target
+      name: sa-nfs-cr-demo
+      namespace: trilio-system
+    retentionPolicy:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Policy
+      name: trilio-latest-retention-policy
+      namespace: trilio-system
+  snapshotConfig:
+    target:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Target
+      name: sa-nfs-cr-demo
+      namespace: trilio-system
+  backupPlanComponents:
+    customSelector:
+      selectResources:
+        gvkSelector:
+          - groupVersionKind:
+              group: kubevirt.io
+              kind: VirtualMachine
+              version: v1
+            objects:
+              - win2k22-aqua-junglefowl-90

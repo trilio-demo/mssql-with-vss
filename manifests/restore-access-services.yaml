@@ -1,0 +1,36 @@
+# Temporary access services for the restored VM.
+# Reason: backup #1 didn't include Services (BackupPlan was VM-only); and
+# even when we add them, NodePort numbers are cluster-wide unique so they'd
+# collide with the live lab. Future: replace with OpenShift Routes in the
+# BackupPlan + a restore-time transform to rewrite the route host.
+#
+# nodePort omitted -> Kubernetes auto-assigns a free port.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mssql-vss-restore-ssh
+  namespace: mssql-vss-restore
+spec:
+  type: NodePort
+  selector:
+    vm.kubevirt.io/name: win2k22-aqua-junglefowl-90
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mssql-vss-restore-rdp
+  namespace: mssql-vss-restore
+spec:
+  type: NodePort
+  selector:
+    vm.kubevirt.io/name: win2k22-aqua-junglefowl-90
+  ports:
+    - name: rdp
+      port: 3389
+      targetPort: 3389
+      protocol: TCP

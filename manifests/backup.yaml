@@ -1,0 +1,13 @@
+apiVersion: triliovault.trilio.io/v1
+kind: Backup
+metadata:
+  # Bump suffix per run, or apply with: oc create -f backup.yaml (generateName)
+  generateName: mssql-vss-backup-
+  namespace: mssql-vss-lab
+spec:
+  type: Full
+  backupPlan:
+    apiVersion: triliovault.trilio.io/v1
+    kind: BackupPlan
+    name: mssql-vss-backupplan
+    namespace: mssql-vss-lab

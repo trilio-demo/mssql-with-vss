@@ -73,7 +73,7 @@ the Windows VM).
 
 ## Project Status
 - [x] Demo scope locked: **DB-only with Python write generator (inside the Windows VM)**
-- [x] Cluster locked: **`ocp-px`** (OCP 4.18.19, OCPv + Trilio 5.1.2 already installed; Portworx storage)
+- [x] Cluster locked: **`ocp-px`** (OCP 4.18.19, OCPv + Trilio already installed; Portworx storage)
 - [x] Python tooling set up (pyenv 3.13.13 + uv) — driver: `pyodbc` + MS ODBC Driver 18 (added when generator is written)
 - [x] Trilio licensed on all clusters
 - [x] Windows version: **Server 2022** (DataSource `win2k22` already defined on cluster)
@@ -89,18 +89,20 @@ the Windows VM).
 - [x] SSH Service selector fixed (`vm.kubevirt.io/name: win2k22-aqua-junglefowl-90` — prep doc YAML had used `kubevirt.io/domain: mssql-lab` which doesn't match the launcher pod's labels)
 - [x] MS SQL Developer Edition installed (**SQL Server 2025**, named instance `MSSQLSERVER01`, default instance was *not* selected) — confirmed via screenshot `collateral/MSSQL-installed-screen.png`
 - [x] **Windows eval rearmed (2026-05-24).** Engineering golden image is Datacenter Evaluation, build `20348.fe_release.210507` (May 2021). `slmgr /rearm` + reboot took the VM out of `Notification` mode; `slmgr /xpr` now shows `Initial grace period ends 6/3/2026 4:27 PM` — only ~10 days, not the documented 180 (rearm-after-expiry quirk). Reboot loop expected to be dead; verify with `oc logs -n openshift-cnv deployment/virt-controller --since=2m | grep <vm>` over the next ~70 min. 4 rearms remaining.
-- [ ] **Blocked — no data disk.** Step 3.4 (Add disk) was missed at VM creation; only the two CD-ROMs (`virtio-win` on D:, `unattendCD` on E:) are attached. SQL installed onto `C:` instead of `D:`. Fix: detach both CDs, add 40 GiB blank data disk, then move SQL data/log/backup dirs to `D:`.
+- [x] **Data disk online (2026-05-25).** 20 GiB virtio disk `disk-copper-cheetah-64` initialized in Windows as **`D:`** (NTFS, label `Data`). CDs (`virtio-win`, `sysprep`) detached. SQL default Data/Log/Backup paths relocated to `D:\SQL{Data,Log,Backup}\` via `xp_instance_regwrite`. Smoke test passed: `demo_db.mdf` / `demo_db_log.ldf` / `demo_db_smoke.bak` all on D:.
 - [ ] Hostname not renamed (still `WIN-1LU5F0AC846`). Cosmetic only; skip or rename later via `Rename-Computer`.
-- [ ] SSMS install (deferred — "Install SSMS" button still on installer completion screen)
-- [ ] Verify done-state once unblocked: `SQLWriter` running, `sqlcmd -S .\MSSQLSERVER01` returns Developer Edition banner
+- [ ] SSMS install (deferred — `sqlcmd -C` works fine for everything we need; revisit if a customer-facing screenshot demands it).
+- [x] Done-state verified: `SQLWriter` + `MSSQL$MSSQLSERVER01` services Running; `sqlcmd -S .\MSSQLSERVER01 -E -C` returns banner; `demo_db` ONLINE.
 - [x] SSH public-key auth working — root cause was `administrators_authorized_keys` written as UTF-16 LE + BOM (PowerShell/editor default); rewritten as plain ASCII via `[System.IO.File]::WriteAllText(..., [System.Text.Encoding]::ASCII)`. Fix + verification baked into `docs/windows-vm-prep.md` § 4e.
-- [ ] Configure Trilio backup target on `ocp-px`
+- [x] **Trilio BackupPlan created (2026-05-25).** `mssql-vss-lab/mssql-vss-backupplan` — VM-scoped (gvkSelector → `win2k22-aqua-junglefowl-90`), target `sa-nfs-cr-demo` (auto-replicated from `trilio-system`), retention `trilio-latest-retention-policy` (latest 5), **trigger-only** (no schedule). Manifests in `manifests/`.
 - [ ] Write Python write generator (continuous INSERTs into `demo_db`)
-- [ ] Run backup; capture VSS freeze/thaw events from Windows Event Viewer
-- [ ] Restore the VM end-to-end; verify SQL comes back clean (no recovery state)
+- [x] **First backup completed (2026-05-25).** `mssql-vss-backup-2phcr` — 7m 52s, ~17.85 GiB on `sa-nfs-cr-demo`. **Freeze evidence captured: 7× Event 18264.** **Finding:** no 18265 (thaw) events + **VSS 8194 "IVssWriterCallback Access Denied"** — workgroup-VM security context blocks the explicit thaw callback to SQL Writer; SQL auto-resumed via internal timeout. Snapshot was taken during freeze so it's still consistent in this quiet lab; under load, this *could* drift to crash-consistent. Restore + load-test will validate. Evidence in `output/`.
+- [x] **Restore test passed (2026-05-28).** `mssql-vss-backup-2phcr` → fresh ns `mssql-vss-restore` via `type: Location` Restore CR (`manifests/restore.yaml`). Wall time **7m 59s** — symmetric with backup #1's 7m 52s (data-transfer-bound). Restored VM Running, all 3 PVCs Bound clean, `MSSQL$MSSQLSERVER01` + `SQLWriter` Running, `demo_db` ONLINE, smoke-test row intact (exact timestamp match to original). **Closes the 8194 / missing-18265 question for quiet load: backup #1 was app-consistent.**
+- [ ] **Services missing from restore.** Our BackupPlan's `gvkSelector` is VM-only, so launcher-pod Services didn't come along. Workaround: ephemeral NodePort access services in `mssql-vss-restore` (manifest `manifests/restore-access-services.yaml`; SSH `30539`, RDP `30123`). **Plan: BackupPlan v2 adds OpenShift Routes + restore-time host-rewrite transform** (NodePorts are cluster-wide; Routes are namespace-scoped — no collision on side-by-side restore).
 - [ ] Demonstrate surgical FLR — pull a single `.mdf` / `.ldf` / `.bak` file from a backup
 - [ ] (Negative control, optional) Repeat backup with QGA stopped — show crash-consistent gap
-- [ ] Bundle evidence in `output/` for the blog-writing agent
+- [ ] **Backup #2 under load** — once generator exists, re-run a backup with continuous writes; check whether torn data appears (real stress test of the 8194 path).
+- [ ] Bundle evidence in `output/` for the blog-writing agent (backup #1 packet copied 2026-05-25; restore-verification + FLR + load-test packets still pending)
 - [ ] Draft customer-facing technical response to Erick
 - [x] Repo shipped (bootstrap step 13): **https://github.com/trilio-demo/mssql-with-vss** (public, 2026-05-24)
 
@@ -109,137 +111,102 @@ the Windows VM).
 ## Session State
 *(Updated at end of each session — read at start of each new session.)*
 
-### Last session: 2026-05-24 (SSH key fix + repo ship + post-SQL-install diagnostics)
+### Last session: 2026-05-28 (cross-NS restore verified clean; 8194 closed for quiet load)
 
 **Accomplished:**
-- **SSH public-key auth fixed.** Root cause: `administrators_authorized_keys`
-  was being written by PowerShell/editor defaults as **UTF-16 LE + BOM**;
-  OpenSSH silently rejects that and falls back to password auth. Fix is to
-  write the file via
-  `[System.IO.File]::WriteAllText(..., $key.Trim() + "`n", [System.Text.Encoding]::ASCII)`
-  and verify with `Format-Hex` (first bytes should be `73 73 68`, not
-  `FF FE`). Procedure + verification baked into `docs/windows-vm-prep.md` § 4e.
-- **Bootstrap step 13 completed: repo shipped.**
-  → **https://github.com/trilio-demo/mssql-with-vss** (public).
-  - Removed bootstrap artifacts (`CLAUDE.md.template`,
-    `project-bootstrap-process.md`, three `.gitkeep`s).
-  - Added `README.md`, added `.claude/` to `.gitignore`.
-  - Reset history, fresh `git init`, single clean initial commit.
-- **Vince installed MS SQL between sessions.** Reviewed evidence in
-  `collateral/`: install screenshot, drive-list screenshot, config notes,
-  `virt-controller` reboot logs. Three issues identified — see **Known
-  issues** below.
-- **`docs/windows-vm-prep.md` updated** with all three findings:
-  - § Prerequisites: callout that engineering's golden image is **Datacenter
-    Evaluation** and the 180-day clock started at image-capture, not boot.
-  - § 3.4: data disk is mandatory, easy to miss; documented how to add
-    post-create.
-  - § 4b: rewritten — the catalog template attaches **two** CD-ROMs
-    (`virtio-win` + `unattendCD`), not one. Detach both (preferred) or
-    rename letters out of `D:`/`E:`.
-  - § 4f (new): Windows activation check + `slmgr /rearm` recipe + how to
-    recognize the 60-minute reboot loop in `virt-controller` logs.
-  - § 6: default vs named instance — `sqlcmd -S .` vs `sqlcmd -S .\<INSTANCE>`.
-  - § 7 done-state checklist: added activation-status row, clarified CDs.
+- **Cross-namespace restore.** Fresh ns `mssql-vss-restore`; Restore CR
+  `mssql-vss-restore-cj6vp` via `type: Location` pattern (manifest
+  `manifests/restore.yaml`). Wall time **7m 59s** — symmetric with backup
+  #1's 7m 52s (data-transfer-bound). All 3 PVCs Bound clean (60G rootdisk,
+  20G data disk, 1G persistent-state). VM Running on `worker-0-frqj5`.
+- **Services did NOT come across.** Our BackupPlan's `gvkSelector` is
+  VM-only — launcher-pod Services weren't selected. Workaround for now:
+  ephemeral NodePort access services in `mssql-vss-restore` with auto-assigned
+  ports — manifest `manifests/restore-access-services.yaml`. **SSH `30539`,
+  RDP `30123`.** Plan: **BackupPlan v2 adds OpenShift Routes** (namespace-scoped,
+  no NodePort collision) + restore-time host-rewrite transform.
+- **Restore validation — backup #1 was app-consistent for quiet load:**
+  `MSSQL$MSSQLSERVER01` + `SQLWriter` Running. `demo_db` ONLINE. `dbo.writes`
+  row intact: `id=1, payload='smoke-test row', ts=2026-05-25 01:12:38.0930152`
+  — exact match to the original write. **Closes the 8194 / missing-18265 open
+  question for quiet load.** The 9-second freeze window outran SQL's 60s
+  IO-freeze timeout; snapshot captured a consistent state before auto-thaw.
+  Generator-driven backup #2 is the real stress test of that claim under writes.
+- **Eval clock:** grace ends **2026-06-03 16:27** (6 days, 4 rearms in reserve).
 
-**Known issues identified end-of-session (parked for tomorrow):**
-1. **Windows eval expired → 60-min reboot loop.** `virt-controller` logs
-   show VMI cycling `Running` → `Succeeded` → relaunch on a ~61-minute
-   cadence (timestamps 17:39 / 18:40 / 19:41 ...). Classic Windows Server
-   eval-expired forced-reboot signature.
-2. **No data disk.** Only the two CD-ROMs are attached
-   (D: `virtio-win-1.9.46`, E: `unattendCD`). SQL installed onto `C:` —
-   muddies the FLR story.
-3. **Install drift vs prep doc.** Vince got SQL **2025** Developer Edition
-   with **named instance `MSSQLSERVER01`** (not default `MSSQLSERVER`).
-   Connection string: `Server=localhost\MSSQLSERVER01;...`. Hostname is
-   still the Sysprep-generated `WIN-1LU5F0AC846` (rename step was skipped).
-   None of these are blockers — just need awareness for the generator config.
+**Doc updates parked (rolled forward from 2026-05-25 + new):**
+1. § 6 + generator section: ODBC 18 self-signed cert workaround — `sqlcmd -C`
+   for sqlcmd, `TrustServerCertificate=yes` for pyodbc.
+2. New post-install §: CD-detach via `oc patch --type=json` + data-disk
+   `Initialize-Disk` (catalog template attaches the disk but doesn't online
+   it in Windows — silent-fail mode if Step 3.4 missed).
+3. New post-install §: SQL default-path relocation via `xp_instance_regwrite`
+   (system DBs on C:, demo DBs on D:).
+4. New post-backup §: 8194 / missing-18265 finding — workgroup-VM security
+   context; document as a "known limitation in non-domain VMs".
+5. New restore §: `type: Location` Restore CR pattern; cross-NS NodePort
+   collision footnote; Routes-via-BackupPlan plan.
+6. Notes: `micro` editor scp-from-Mac; SSMS still deferred (`sqlcmd -C` enough).
 
 **Open items for next session (in priority order):**
-1. **Confirm reboot loop is dead.** Quick check before doing anything else:
-   `oc logs -n openshift-cnv deployment/virt-controller --since=2h | grep win2k22-aqua-junglefowl-90`.
-   No `Stopping VM with VMI in phase Succeeded` entries since the 2026-05-24
-   rearm → loop is clean. If it reappears, rearm wasn't durable; consider
-   edition conversion. Eval grace currently ends **2026-06-03 4:27 PM**, so
-   plan to either finish the lab before then or rearm again (4 left).
-2. **Add the data disk.** Console → VM → Disks → Add disk: `data`, Blank,
-   40 GiB, default SC. Stop/start VM. Detach `unattendCD` (and
-   optionally `virtio-win`). PowerShell `Initialize-Disk` /
-   `New-Partition -DriveLetter D` / `Format-Volume`.
-3. **Move SQL data dirs to `D:`.** `ALTER DATABASE master MODIFY FILE …`
-   for system DBs, or detach/move/attach for user DBs. Restart the
-   `MSSQL$MSSQLSERVER01` service. Re-verify `Get-Service SQLWriter`.
-4. **Install SSMS** (deferred from this session).
-5. **Configure Trilio backup target on `ocp-px`** — pick S3 vs NFS,
-   confirm TVK namespace, set up target Secret + `Target` CR.
-6. **Write the Python generator** (`src/write_generator.py`):
-   `uv add pyodbc`, continuous INSERT loop into `demo_db`, package for
-   the Windows VM (uv-on-Windows + MS ODBC Driver 18). Connection string
-   must use `localhost\MSSQLSERVER01`.
+1. **Capture today's evidence** into `output/`: restore-verification SSH
+   transcript (services + `demo_db` ONLINE + smoke-test row); side-by-side
+   `oc get vm -A` showing both namespaces running.
+2. **FLR demo** (Task #10). Pull single `.mdf`/`.ldf`/`.bak` from backup #1
+   via Trilio UI/CLI. Note: VM backups use block-mode PVCs — FLR may need a
+   helper pod to mount the snapshot PVC rather than a built-in file browser.
+   Research Trilio's FLR path on this cluster first.
+3. **Python generator** (Task #11). `uv add pyodbc`; `src/write_generator.py` —
+   continuous INSERT loop into `demo_db.dbo.writes`. Conn string must include
+   `Server=localhost\MSSQLSERVER01;Encrypt=yes;TrustServerCertificate=yes`.
+4. **Backup #2 under load.** Real stress test of the 9-second-window claim.
+5. **BackupPlan v2** — add Routes + restore-time transform.
+6. **Bake parked doc updates into `docs/windows-vm-prep.md`** (see list above).
+7. **Draft customer-facing response to Erick** once FLR + load-test evidenced.
 
-### Previous session: 2026-05-06 (bootstrap)
-**Accomplished:**
-- Read conversation (`collateral/City-of-Delray-Beach-VSS-with-Trilio.md`)
-  and customer environment notes (`collateral/about-City-of-Delray-Beach.txt`).
-- Inferred project type: **app** (lab POC, no agent persona).
-- Populated this CLAUDE.md from template.
-- Wrote `docs/requirements.md` with lab spec, capture plan for blog agent.
-- Removed `prompts/` (app project — no system prompt needed).
-- **Locked open decisions with Vince:**
-  - Demo scope: DB-only + Python write generator.
-  - Cluster: existing 3-node `ocp-dev` lab.
-  - Repo finalization (step 13): deferred until after first lab run.
-- Set up Python tooling: `pyproject.toml`, `.python-version` (3.13.13),
-  `uv.lock`, `.venv/` via `uv sync`. No deps added yet.
+**Lab state at end of 2026-05-28:**
+- Cluster: `ocp-px`. Eval grace: ends 2026-06-03 16:27 (6 days, 4 rearms).
+- `mssql-vss-lab/win2k22-aqua-junglefowl-90` — original, Running on
+  `worker-0-frqj5`. `demo_db` ONLINE.
+- `mssql-vss-restore/win2k22-aqua-junglefowl-90` — restored, Running on
+  `worker-0-frqj5`. `demo_db` ONLINE, smoke-test row intact.
+- Backup `mssql-vss-backup-2phcr` Available · Restore
+  `mssql-vss-restore-cj6vp` Completed.
+- Reach restored VM: `ssh administrator@172.31.1.56 -p 30539`, RDP `:30123`.
 
-**In progress:** Nothing. Awaiting Vince's go-ahead to start lab stand-up.
+---
 
-**Decisions added this session (2026-05-07):**
-- **Cluster swap: `ocp-dev` → `ocp-px`.** OCP 4.18.19, OCPv (CNV) + Trilio 5.1.2
-  both already running. Portworx storage matches Delray's prod stack — bonus
-  alignment for the blog narrative.
-- **Win2k22** locked (DataSource already defined on cluster; matches engineering's guide).
-- **`px-csi-replicated`** storage class for the VM disks; snapshots via `px-csi-snapclass`.
-- **Fresh namespace, fresh VM from golden image** (not the orphaned 144-day-old
-  `vbns-win2k22-i01` PVC). Golden image not yet imported — that's part of
-  Vince's prep, per the engineering doc he dropped in `collateral/`.
-- **PDF inspector tool added:** `src/pdf_inspect.py` (pymupdf). `uv add pymupdf`
-  done. Reusable for future collateral.
+### Previous session: 2026-05-25 (D: drive online + SQL on D: + first backup + 8194 finding)
 
-**Resolved 2026-05-07:**
-- Golden-image guide re-exported correctly (7 pages, full procedure).
-- `px-csi-replicated` annotated `storageclass.kubevirt.io/is-default-virt-class=true`.
-- `docs/windows-vm-prep.md` rewritten to follow engineering's golden-image flow.
-- **Discovered:** `ocs-storagecluster-ceph-rbd-virtualization` on `ocp-px` is
-  an orphaned shell (no `cephcluster` CRD, no `csi-rbdplugin-provisioner`).
-  Switched upload to `px-csi-replicated` RWO block.
-- `win2k22` DataVolume upload completed (multi-hour at ~1 MB/s).
+**Accomplished:** CDs detached, 20 GiB data disk initialized as `D:`
+(NTFS, label `Data`). SQL default Data/Log/Backup paths relocated to
+`D:\SQL{Data,Log,Backup}\` via `xp_instance_regwrite` (system DBs left on C:).
+`sqlcmd -C` workaround for ODBC 18 self-signed cert error. Trilio BackupPlan
+created (VM-scoped, target `sa-nfs-cr-demo` auto-replicated from
+`trilio-system`, retention 5, trigger-only). First backup `mssql-vss-backup-2phcr`
+Available, 7m 52s, ~17.85 GiB. 9-second freeze window (well inside SQL's 60s
+IO-freeze timeout). `micro` editor scp'd from Mac (curl on Win2k22 wouldn't
+follow GitHub redirects).
 
-**Resolved 2026-05-08 (and baked into `docs/windows-vm-prep.md`):**
-- **Secure Boot off required** for engineering's Win2k22 golden image. Catalog
-  template defaults Secure Boot on; image's bootloader signing chain doesn't
-  match OVMF secboot trust → VM parks at TianoCore. Patch `secureBoot:false`
-  + `smm.enabled:false` (KubeVirt couples them) before first start.
-- **Stuck-stop / ghost-record recovery** documented as a callout: force-stop
-  + strip VMI finalizers + restart virt-handler on the affected node clears
-  the `can not add ghost record when entry already exists with differing UID`
-  state.
-- **Virtio drivers CD grabs `D:`** before the data disk is online — reassign
-  to `X:` first, then format the data disk on `D:`.
-- **Service selector gotcha** — catalog VMs' launcher pods have
-  `kubevirt.io/domain` set to the **VM resource name**, not the Windows
-  hostname. Prep doc § 5 now leads with the Console "Create RDP/SSH service"
-  buttons and uses `vm.kubevirt.io/name` in the YAML alternative.
-- **Password placeholder** in the Sysprep XML; AutoLogon + AdministratorPassword
-  must match.
+**Finding — VSS callback gap (carried forward; validated under quiet load
+on 2026-05-27):**
+- **7× Event 18264** (`I/O is frozen on database…`) at 01:45:31 local.
+- **0× Event 18265** (the matching thaw — none).
+- **VSS Event 8194** *(Informational)*: `Unexpected error querying for the
+  IVssWriterCallback interface. hr = 0x80070005, Access is denied.`
+- **Hypothesis:** workgroup VM → VSS requester (driven from QGA) can't
+  satisfy the `IVssWriterCallback` ACL → VSS can't notify SQL Writer of the
+  post-snapshot thaw → SQL never logs 18265 → SQL's internal IO-freeze
+  timeout (~60s) expires and SQL auto-resumes silently. Snapshot captured
+  during freeze, so quiet-load result is consistent (confirmed 2026-05-27 via
+  restore + data check). **Under load this could degrade to crash-consistent.**
+  Python generator under load is the real test.
+- **Blog narrative:** document both the success path AND the gap — don't sanitize.
 
-**Lab state at end of 2026-05-08:**
-- Cluster: `ocp-px` (current `oc` context).
-- Namespace: `mssql-vss-lab`.
-- VM resource: `win2k22-aqua-junglefowl-90` (Running).
-- Reach from Mac: RDP `172.31.1.56:31211`, SSH `administrator@172.31.1.56 -p 31256` (password auth).
-- Vince running MS SQL install + post-config between sessions.
-
-*(The 2026-05-08 open-items list has been superseded by the 2026-05-24
-entry at the top of this Session State.)*
+### Earlier sessions
+*Bootstrap (2026-05-06) → cluster/VM stand-up (2026-05-07/08) details have
+aged out of relevance. Durable facts live in **Project Status** above; all
+the journey is in `git log`. Notable historic notes baked into
+`docs/windows-vm-prep.md`: Secure Boot off for the golden image, stuck-stop
+ghost-record recovery, service-selector gotcha, Sysprep password placeholder,
+Datacenter-Eval `slmgr /rearm` quirk.*
