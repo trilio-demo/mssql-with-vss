@@ -26,6 +26,32 @@ Two related deliverables:
 - **Windows VM prep guide:** [docs/windows-vm-prep.md](docs/windows-vm-prep.md)
   *(self-contained reference — Vince uses this offline to build the SQL VM)*
 
+## Strategic context — MVP target
+
+The lab POC validates the foundation; the **MVP design target** is the
+path from "app-consistent VM backup" to **5-min RPO with point-in-time
+restore**:
+
+- **Primary: Mechanism C** — TVK orchestrates `BACKUP LOG` via QGA
+  `guest-exec`, ships `.trn` to NooBaa S3, plus a `COPY_ONLY .bak`
+  chain anchor at every Trilio backup (Path A).
+- **Sibling: Mechanism F** — Customer's `BACKUP LOG TO URL='s3://...'`
+  schedule + TVK orchestrates restore-side chain replay. This is the
+  story when OpenShift policy blocks `guest-exec`.
+
+Mechanism comparison, worked RPO/RTO scenarios, and roadmap for
+Mechanisms D/E (phased restore + in-guest component-mode VSS
+requestor) live in:
+
+- `private-docs/research-tvk-mssql-vss-deep-dive.md` — TVK-focused
+  MSSQL/VSS primer + RPO/RTO design (2026-05-29)
+- `private-docs/research-t4o-mssql-vss-restore.md` — companion T4O
+  research (2026-05-28); product narrative parity
+
+Both are gitignored (`private-docs/` is local-only by policy and
+contains internal positioning/roadmap material). Read them when a
+question goes beyond the MVP framing above.
+
 ## Input / Output
 - **Input:**
   - Customer/conversation context in `collateral/` (one-time, gitignored).
@@ -103,8 +129,13 @@ the Windows VM).
 - [ ] Demonstrate surgical FLR — pull a single `.mdf` / `.ldf` / `.bak` file from a backup
 - [ ] (Negative control, optional) Repeat backup with QGA stopped — show crash-consistent gap
 - [ ] **Backup #2 under load** — once generator exists, re-run a backup with continuous writes; check whether torn data appears (real stress test of the 8194 path).
-- [ ] Bundle evidence in `output/` for the blog-writing agent (backup #1 packet copied 2026-05-25; restore-verification + FLR + load-test packets still pending)
-- [ ] Draft customer-facing technical response to Erick
+- [x] **MVP-validation experiment 1 (2026-05-29): `demo_db` already in Full recovery model** (default with our SQL install). Baseline captured: `.mdf`/`.ldf` 8 MB each, `log_reuse_wait_desc=NOTHING`, 1 row in `dbo.writes`, 0 prior log backups in msdb.
+- [x] **MVP-validation experiment 2 (2026-05-29): SYSTEM-via-QGA-exec drives sqlcmd successfully.** `NT AUTHORITY\SYSTEM` was NOT in sysadmin by default — granted via `ALTER SERVER ROLE sysadmin ADD MEMBER [NT AUTHORITY\SYSTEM]`. `BACKUP LOG` via QGA-as-SYSTEM: 53 pages in 0.045s, file at `D:\SQLBackup\demo_db_exp2_via_qga_as_system.trn`. Customer-prod recommendation: dedicated SQL login with least-privilege, not SYSTEM-as-sysadmin.
+- [x] **MVP-validation experiment 3 (2026-05-29): `BACKUP LOG ... TO URL='s3://...'` works end-to-end.** AWS S3 bucket `mssql-vss-lab` (us-east-1) + SQL CREDENTIAL `s3://mssql-vss-lab.s3.us-east-1.amazonaws.com/lab` created. Driven via QGA-as-SYSTEM: 5 pages in 0.261s, validated via `RESTORE HEADERONLY` round-trip. Credentials in `collateral/aws-s3-bucket.txt` (rotate after lab work). Mechanism C + F primitive proven end-to-end.
+- [ ] **MVP-validation experiment 4: end-to-end log-replay restore via Path A.** With Full recovery + Trilio backup with same-window `BACKUP DATABASE ... WITH COPY_ONLY` `.bak` anchor + post-snapshot `BACKUP LOG` cycles, restore VM cross-NS, then `RESTORE DATABASE demo_db FROM DISK='.bak' WITH NORECOVERY, REPLACE` + `RESTORE LOG FROM URL='s3://...' WITH RECOVERY`. Verify row count matches post-snapshot state. Plan: ~30–45 min.
+- [ ] **Bake parked `docs/windows-vm-prep.md` updates** (carried from 2026-05-25/28): (a) ODBC 18 self-signed cert workaround (`sqlcmd -C` / `TrustServerCertificate=yes`); (b) CD-detach + data-disk `Initialize-Disk` post-install §; (c) SQL default-path relocation via `xp_instance_regwrite`; (d) `type: Location` Restore CR pattern + cross-NS NodePort collision footnote + Routes-via-BackupPlan plan; (e) `micro` editor scp-from-Mac note; SSMS still deferred.
+- [ ] Bundle evidence in `output/` for the blog-writing agent (backup #1 packet copied 2026-05-25; restore-verification + FLR + load-test + MVP-validation packets still pending)
+- [ ] **Draft customer-facing technical response to Erick** — frame around the C+F MVP path (5-min RPO) with lab evidence citations + RPO/RTO positioning vs. crash-consistent baseline. Source material: `private-docs/research-tvk-mssql-vss-deep-dive.md`.
 - [x] Repo shipped (bootstrap step 13): **https://github.com/trilio-demo/mssql-with-vss** (public, 2026-05-24)
 
 ---
@@ -112,142 +143,59 @@ the Windows VM).
 ## Session State
 *(Updated at end of each session — read at start of each new session.)*
 
-### Last session: 2026-05-28 (cross-NS restore + QGA/VSS diagnostic — backup #1 fully validated, event-ID misread retracted)
+### Last session: 2026-05-29 (MVP-validation experiments 1–3 ✓; Mechanism C end-to-end proven)
 
-**Accomplished (morning — cross-NS restore):**
-- **Cross-namespace restore.** Fresh ns `mssql-vss-restore`; Restore CR
-  `mssql-vss-restore-cj6vp` via `type: Location` pattern (manifest
-  `manifests/restore.yaml`). Wall time **7m 59s** — symmetric with backup
-  #1's 7m 52s (data-transfer-bound). All 3 PVCs Bound clean (60G rootdisk,
-  20G data disk, 1G persistent-state). VM Running on `worker-0-frqj5`.
-- **Services did NOT come across.** Our BackupPlan's `gvkSelector` is
-  VM-only — launcher-pod Services weren't selected. Workaround for now:
-  ephemeral NodePort access services in `mssql-vss-restore` with auto-assigned
-  ports — manifest `manifests/restore-access-services.yaml`. **SSH `30539`,
-  RDP `30123`.** Plan: **BackupPlan v2 adds OpenShift Routes** (namespace-scoped,
-  no NodePort collision) + restore-time host-rewrite transform.
-- **Restore validation:** `MSSQL$MSSQLSERVER01` + `SQLWriter` Running.
-  `demo_db` ONLINE. `dbo.writes` row intact: `id=1,
-  payload='smoke-test row', ts=2026-05-25 01:12:38.0930152` — exact match
-  to the original write. Empirical app-consistency confirmed.
+**Accomplished:**
+- **Exp 1 ✓** — `demo_db` already in Full recovery model; baseline captured (see Project Status [x] entry).
+- **Exp 2 ✓** — QGA `guest-exec` runs sqlcmd as `NT AUTHORITY\SYSTEM`. SYSTEM was NOT sysadmin by default; granted via `ALTER SERVER ROLE sysadmin ADD MEMBER [NT AUTHORITY\SYSTEM]`. End-to-end `BACKUP LOG` via QGA-as-SYSTEM works (53 pages, 0.045s to local disk).
+- **Exp 3 ✓** — Full Mechanism C chain: AWS S3 bucket `mssql-vss-lab` (us-east-1), SQL CREDENTIAL created, `BACKUP LOG TO URL='s3://...'` via QGA-as-SYSTEM produced `lab/demo_db_exp3.trn` (~196 KB), `RESTORE HEADERONLY` round-trip validates the bytes are in S3.
 
-**Accomplished (afternoon — QGA/VSS diagnostic):**
-- **Full QGA command sweep.** QGA 110.0.2 in the VM. Verified
-  `guest-info`, `guest-ping`, `guest-sync`, `guest-get-osinfo/-host-name/
-  -time/-timezone/-users/-vcpus/-load/-fsinfo/-disks/-ssh-keys`,
-  `guest-network-get-interfaces`, `guest-exec` (runs as `NT AUTHORITY\SYSTEM`).
-  **No "restore trigger" exists** — QGA is host→guest RPC; the guest is
-  not notified when KubeVirt rehydrates PVCs. Restore-side hooks must be
-  guest-boot-task + sentinel, or cluster-side.
-- **Manual freeze/thaw cycle** via `virsh qemu-agent-command`. 4 filesystems
-  quiesced (C:, D:, 2× System Reserved). Window 12:50:52–12:51:01 CDT
-  (~9s, mirrors backup #1). All 12 VSS writers ended `Stable / No error`,
-  including **SqlServerWriter**.
-- **Event-log correlation produced identical signature to backup #1:**
-  3197 ×7 (freeze), **3198 ×7 (thaw)**, 18264 ×7 (DB backed up), 8194 ×2.
-- **🔴 CORRECTED 2026-05-25 misread.** Backup #1 was originally tagged
-  "no thaw events" because we searched for **18265**. 18265 is **transaction-log
-  backup**, NOT thaw. The actual freeze/thaw IDs are **3197/3198**, and
-  re-grep of `output/vss-events-backup1-20260525-015910.txt` shows
-  3198 ×7 were there the whole time. **Backup #1 had a complete, clean
-  VSS handshake.** The 8194 is an optional `IVssWriterCallback` ACL miss
-  on workgroup VMs — cosmetic, SqlServerWriter doesn't depend on it.
-- **Dual-provider quirk explained.** SQL named-instance `MSSQLSERVER01`
-  logs each freeze/thaw under BOTH `MSSQLSERVER` (legacy) and
-  `MSSQL$MSSQLSERVER01` (instance) providers. That's why 4 DBs produce
-  7× events (3 system DBs ×2 providers + demo_db on the instance provider
-  only — model on the legacy provider has separate accounting).
-- **Memory:** saved `project_lab_ssh_key.md` (use
-  `~/.ssh/vbky-temp-key.pem` for lab VMs — default keys not authorized).
-- **Evidence captured:** `output/vss-diagnostic-20260528.md`,
-  `output/vss-events-manual-freezethaw-20260528-125052.txt`,
-  `output/vssadmin-list-writers-20260528.txt`.
+**Durable lab state changes (next session needs to know):**
+- `NT AUTHORITY\SYSTEM` is now sysadmin on `MSSQLSERVER01` (lab convenience; prod recommendation: least-privilege login, not SYSTEM).
+- SQL CREDENTIAL `s3://mssql-vss-lab.s3.us-east-1.amazonaws.com/lab` exists in `master`; AWS keys live in `collateral/aws-s3-bucket.txt` (rotate after lab work).
+- Egress from VM to `s3.amazonaws.com:443` is open — no NetworkPolicy blocker.
+- Artifacts: `D:\SQLBackup\demo_db_exp2_via_qga_as_system.trn` (lab disk); `s3://mssql-vss-lab/lab/demo_db_exp3.trn` (S3).
 
-**Eval clock:** grace ends **2026-06-03 16:27** (6 days, 4 rearms in reserve).
+**Eval clock:** grace ends **2026-06-03 16:27** (5 days, 4 rearms in reserve).
 
-**Doc updates parked (rolled forward from 2026-05-25 + new):**
-1. § 6 + generator section: ODBC 18 self-signed cert workaround — `sqlcmd -C`
-   for sqlcmd, `TrustServerCertificate=yes` for pyodbc.
-2. New post-install §: CD-detach via `oc patch --type=json` + data-disk
-   `Initialize-Disk` (catalog template attaches the disk but doesn't online
-   it in Windows — silent-fail mode if Step 3.4 missed).
-3. New post-install §: SQL default-path relocation via `xp_instance_regwrite`
-   (system DBs on C:, demo DBs on D:).
-4. New restore §: `type: Location` Restore CR pattern; cross-NS NodePort
-   collision footnote; Routes-via-BackupPlan plan.
-5. Notes: `micro` editor scp-from-Mac; SSMS still deferred (`sqlcmd -C` enough).
+**Open items for next session (priority order):**
+1. **Exp 4 — end-to-end log-replay restore via Path A** (the big one). Plan: (a) seed `dbo.writes` rows; (b) Trilio backup with same-window `BACKUP DATABASE ... WITH COPY_ONLY` `.bak`; (c) post-snapshot rows; (d) `BACKUP LOG TO URL` (proven); (e) Trilio Restore cross-NS; (f) on restored VM: `RESTORE DATABASE WITH NORECOVERY, REPLACE` + `RESTORE LOG WITH RECOVERY`; (g) verify row count. ~30–45 min.
+2. **Python write generator** — for continuous workload; nice-to-have for Exp 4 (manual INSERTs sufficient for the basic test).
+3. **Backup #2 under load** — depends on (2).
+4. **FLR demo** — pull `.mdf` / `.ldf` / `.bak` via Trilio UI/CLI; helper-pod path likely needed.
+5. **BackupPlan v2** — Routes + restore-time host-rewrite transform.
+6. **Bake parked `docs/windows-vm-prep.md` updates** (5 items — see Project Status checkbox).
+7. **Customer response to Erick** — frame around C+F MVP path with Exp 1–4 evidence.
 
-(The previously parked 8194 / missing-18265 item is **dropped** — it was a
-backup-analysis artifact, not a VM-build step, and the corrected explainer
-now lives in `output/vss-diagnostic-20260528.md`.)
-
-**Open items for next session (in priority order):**
-1. **Python generator** (Task #11). `uv add pyodbc`; `src/write_generator.py` —
-   continuous INSERT loop into `demo_db.dbo.writes`. Conn string must include
-   `Server=localhost\MSSQLSERVER01;Encrypt=yes;TrustServerCertificate=yes`.
-   Decide where it runs (Mac, in-cluster pod, or in the VM itself).
-2. **Backup #2 under load.** Only remaining open consistency question:
-   does a heavy write rate stretch the freeze window past SQL's ~60s
-   I/O-freeze ceiling? Capture event log + row-count delta on `dbo.writes`.
-3. **FLR demo** (Task #10). Pull single `.mdf`/`.ldf`/`.bak` from backup #1
-   via Trilio UI/CLI. VM backups are block-mode PVCs — FLR may need a
-   helper pod to mount the snapshot PVC rather than a built-in file browser.
-   **Research Trilio's FLR path on this cluster first.**
-4. **BackupPlan v2** — add Routes + restore-time host-rewrite transform.
-5. **Bake parked doc updates into `docs/windows-vm-prep.md`** (5 items above).
-6. **Draft customer-facing response to Erick** once #2/#3 evidenced.
-
-**Lab state at end of 2026-05-28:**
-- Cluster: `ocp-px`. Eval grace: ends 2026-06-03 16:27 (6 days, 4 rearms).
-- `mssql-vss-lab/win2k22-aqua-junglefowl-90` — original, Running on
-  `worker-0-frqj5`. `demo_db` ONLINE.
-- `mssql-vss-restore/win2k22-aqua-junglefowl-90` — restored, Running on
-  `worker-0-frqj5`. `demo_db` ONLINE, smoke-test row intact.
-- Backup `mssql-vss-backup-2phcr` Available · Restore
-  `mssql-vss-restore-cj6vp` Completed.
-- Reach original VM: `ssh -i ~/.ssh/vbky-temp-key.pem -p 31256
-  administrator@172.31.1.56`.
-- Reach restored VM: `ssh -i ~/.ssh/vbky-temp-key.pem -p 30539
-  administrator@172.31.1.56`, RDP `:30123`.
+**Lab state at end of 2026-05-29:**
+- Cluster: `ocp-px` (context `mssql-vss-lab/api-ocp-px-demo-presales-trilio-io:6443/kube:admin`).
+- `mssql-vss-lab/win2k22-aqua-junglefowl-90` — Running on `worker-0-frqj5`. `demo_db` ONLINE, Full recovery, SYSTEM sysadmin, S3 credential live.
+- `mssql-vss-restore/win2k22-aqua-junglefowl-90` — still Running from 2026-05-28 restore test; `demo_db` ONLINE, smoke-test row intact.
+- Launcher pod (original VM): `virt-launcher-win2k22-aqua-junglefowl-90-nrtc7`.
+- Reach original VM: `ssh -i ~/.ssh/vbky-temp-key.pem -p 31256 administrator@172.31.1.56`.
+- QGA-driven exec pattern: `oc exec -n mssql-vss-lab virt-launcher-win2k22-aqua-junglefowl-90-nrtc7 -c compute -- virsh qemu-agent-command mssql-vss-lab_win2k22-aqua-junglefowl-90 '<qga-json>'`.
+- S3: `s3://mssql-vss-lab/lab/` (us-east-1); creds in `collateral/aws-s3-bucket.txt`.
 
 ---
 
-### Previous session: 2026-05-25 (D: drive online + SQL on D: + first backup + 8194 finding)
+### Previous session: 2026-05-28 (cross-NS restore validated + QGA/VSS diagnostic)
 
-**Accomplished:** CDs detached, 20 GiB data disk initialized as `D:`
-(NTFS, label `Data`). SQL default Data/Log/Backup paths relocated to
-`D:\SQL{Data,Log,Backup}\` via `xp_instance_regwrite` (system DBs left on C:).
-`sqlcmd -C` workaround for ODBC 18 self-signed cert error. Trilio BackupPlan
-created (VM-scoped, target `sa-nfs-cr-demo` auto-replicated from
-`trilio-system`, retention 5, trigger-only). First backup `mssql-vss-backup-2phcr`
-Available, 7m 52s, ~17.85 GiB. 9-second freeze window (well inside SQL's 60s
-IO-freeze timeout). `micro` editor scp'd from Mac (curl on Win2k22 wouldn't
-follow GitHub redirects).
+**Cross-NS restore proven:** backup `mssql-vss-backup-2phcr` → fresh `mssql-vss-restore` ns via `type: Location` Restore CR (`manifests/restore.yaml`), 7m 59s wall time, `demo_db` ONLINE with smoke-test row intact. Empirical app-consistency confirmed.
 
-**Finding — VSS callback gap (RETRACTED / CORRECTED 2026-05-28 — see
-`output/vss-diagnostic-20260528.md`):**
-- Original 2026-05-25 read: "7× 18264 (freeze), 0× 18265 (thaw), VSS 8194 —
-  thaw is broken." **Wrong on the event IDs.**
-- Correct mapping: freeze = **3197**, thaw = **3198**, "DB backed up" =
-  **18264**, "log backed up" = **18265** (only fires for transaction-log
-  backups, NOT VSS snapshots).
-- Re-grep of `output/vss-events-backup1-20260525-015910.txt` with the right
-  IDs: 3197 ×7, **3198 ×7** (thaw events were always there), 18264 ×7,
-  8194 ×2.
-- VSS 8194 = optional `IVssWriterCallback` ACL miss on workgroup VMs.
-  SqlServerWriter does not depend on this callback, so the standard
-  `OnThaw` path delivers and SQL logs 3198 + 18264 normally. Benign noise.
-- **Net:** backup #1 had a full, clean freeze/thaw handshake. The
-  load-window concern is purely about SQL's ~60s I/O-freeze timeout vs.
-  freeze duration — separate question, settled by the generator + load
-  backup, not by the 8194 path.
-- **Blog narrative:** document the dual event-ID providers (per-DB ×2 for
-  named instance) and the 8194 workgroup quirk as an explainer, not a defect.
+**Open gap:** BackupPlan `gvkSelector` is VM-only, so launcher-pod Services don't survive restore. Workaround: ephemeral NodePort services in `mssql-vss-restore` (`manifests/restore-access-services.yaml`, SSH `30539`, RDP `30123`). Fix planned: BackupPlan v2 adds Routes + restore-time host-rewrite transform.
+
+**QGA/VSS diagnostic:** Manual `virsh qemu-agent-command guest-fsfreeze-freeze/-thaw` produced identical event signature to backup #1 (3197×7 freeze / 3198×7 thaw / 18264×7 backup-complete / 8194×2). All 12 VSS writers Stable/No error. Full detail: `output/vss-diagnostic-20260528.md`.
+
+**Retracted 2026-05-25 misread:** real freeze/thaw IDs are 3197/3198, not 18264/18265. 18265 = transaction-log backup, NOT thaw. Backup #1 had a complete handshake. 8194 is benign workgroup-VM `IVssWriterCallback` ACL noise.
+
+---
 
 ### Earlier sessions
-*Bootstrap (2026-05-06) → cluster/VM stand-up (2026-05-07/08) details have
-aged out of relevance. Durable facts live in **Project Status** above; all
-the journey is in `git log`. Notable historic notes baked into
-`docs/windows-vm-prep.md`: Secure Boot off for the golden image, stuck-stop
-ghost-record recovery, service-selector gotcha, Sysprep password placeholder,
-Datacenter-Eval `slmgr /rearm` quirk.*
+*2026-05-25 (data disk online as D: + SQL paths relocated + first Trilio
+backup `mssql-vss-backup-2phcr` at 7m 52s / 17.85 GiB) and bootstrap
+(2026-05-06) → cluster/VM stand-up (2026-05-07/08) have aged out of
+context relevance. Durable facts live in **Project Status** above; the
+journey is in `git log` and `output/` artifacts. Notable historic notes
+baked into `docs/windows-vm-prep.md`: Secure Boot off for the golden
+image, stuck-stop ghost-record recovery, service-selector gotcha,
+Sysprep password placeholder, Datacenter-Eval `slmgr /rearm` quirk.*
