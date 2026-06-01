@@ -147,7 +147,7 @@ the Windows VM).
 
 **Accomplished:**
 - **Exp 4 ✓** — full Path A chain validated: Trilio backup (7m31s/19.7 GiB) + COPY_ONLY `.bak` anchor on D: + post-anchor `BACKUP LOG TO URL` → cross-NS restore (9m10s) → in-guest `RESTORE DB WITH NORECOVERY` + `RESTORE LOG WITH RECOVERY` (~300 ms) → final 16 rows = 1 smoke + 10 pre + 5 post. Post-anchor timestamps preserved end-to-end (proves log replay, not crash-consistent rewind). VSS handshake signature on backup #2 matches backup #1. See Project Status entry + `output/exp4-summary.md`.
-- **Internal status email + customer response to Erick** drafted (see below; not yet sent).
+- **Internal status email + customer response to Erick** drafted and saved to `private-docs/2026-06-01-internal-status-draft.md` and `private-docs/2026-06-01-erick-reply-draft.md` (both gitignored). Internal calls out Veeam explicitly + the OCP-PX→NFS / S3 log-shipping shape; external avoids internal numbers and competitor names (Florida public-records law makes Erick's mailbox FOIA-able). Opportunity ask was sharpened from Vince's prior reply — Erick didn't engage on the soft version. Not yet sent.
 
 **Durable lab state changes (next session needs to know):**
 - `dbo.writes` on original VM now has **16 rows** (1 smoke + 10 `exp4-pre-anchor-N` + 5 `exp4-post-anchor-N`).
@@ -159,7 +159,7 @@ the Windows VM).
 **Eval clock:** grace ends **2026-06-03 16:27** (~2 days, 4 rearms in reserve).
 
 **Open items for next session (priority order):**
-1. **Send internal status email + customer response to Erick** — drafts in this session's history; review, refine, send.
+1. **Send internal status email + customer response to Erick** — drafts at `private-docs/2026-06-01-internal-status-draft.md` and `private-docs/2026-06-01-erick-reply-draft.md` (recipients + Cc listed in those files). Order: internal first; ~24h review window; then Erick reply with the AE on Cc. One open verbiage check: confirm `RTO: Zero (CR) to data-transfer-bound` reads as intended to the internal audience (could expand `CR` if ambiguous).
 2. **Python write generator** — for continuous workload; needed for backup-under-load test.
 3. **Backup #2 under load** — depends on (2). Verifies torn-write robustness of the freeze/thaw under sustained pressure.
 4. **FLR demo** — pull `.mdf` / `.ldf` / `.bak` via Trilio UI/CLI; helper-pod path likely needed.
