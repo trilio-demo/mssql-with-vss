@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mssql-vss-restore-exp4-ssh
+  namespace: mssql-vss-restore-exp4
+spec:
+  type: NodePort
+  selector:
+    vm.kubevirt.io/name: win2k22-aqua-junglefowl-90
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mssql-vss-restore-exp4-rdp
+  namespace: mssql-vss-restore-exp4
+spec:
+  type: NodePort
+  selector:
+    vm.kubevirt.io/name: win2k22-aqua-junglefowl-90
+  ports:
+    - name: rdp
+      port: 3389
+      targetPort: 3389
+      protocol: TCP

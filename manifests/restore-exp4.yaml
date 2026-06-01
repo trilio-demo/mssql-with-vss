@@ -1,0 +1,19 @@
+apiVersion: triliovault.trilio.io/v1
+kind: Restore
+metadata:
+  generateName: mssql-vss-restore-exp4-
+  namespace: mssql-vss-restore-exp4
+spec:
+  restoreFlags:
+    skipIfAlreadyExists: true
+  source:
+    type: Location
+    # location filled in after mssql-vss-backup-kcxdl completes:
+    # oc get backup mssql-vss-backup-kcxdl -n mssql-vss-lab -o jsonpath='{.status.location}'
+    # mssql-vss-backup-kcxdl on sa-nfs-cr-demo (2026-06-01, 7m31s / 19.7 GiB)
+    location: f0c1db45-c27b-4c77-bc03-ab5565ad738d/03b0cc34-2136-4f52-84a7-5c2e8d8053c3
+    target:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Target
+      name: sa-nfs-cr-demo
+      namespace: trilio-system
