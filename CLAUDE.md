@@ -137,69 +137,68 @@ the Windows VM).
 - [ ] Bundle evidence in `output/` for the blog-writing agent (backup #1 packet copied 2026-05-25; restore-verification + FLR + load-test + MVP-validation packets still pending)
 - [ ] **Draft customer-facing technical response to Erick** — frame around the C+F MVP path (5-min RPO) with lab evidence citations + RPO/RTO positioning vs. crash-consistent baseline. Source material: `private-docs/research-tvk-mssql-vss-deep-dive.md`.
 - [x] Repo shipped (bootstrap step 13): **https://github.com/trilio-demo/mssql-with-vss** (public, 2026-05-24)
+- [x] **Lab guide published to public repo (2026-06-07).** `docs/lab-guide.md` — 12-step reproducible procedure with inline SQL + manifests + troubleshooting. Audience-widened (not just "Trilio colleagues"), scrubbed of internal taxonomy + competitive/roadmap framing. Internal-only companion docs (`flow.md`, `flow-prompt-claude-design.md`, `flow.pdf`) parked in `private-docs/`. `*.pdf` gitignored. Commit `a683311` on `origin/main`.
+- [ ] **Prototype Trilio hook into virt-launcher pod** — drive in-guest SQL flows (e.g. pre-backup `COPY_ONLY .bak`) automatically via QGA-exec lifecycle hooks. Closes the `[MANUAL]` gap that today's lab guide hands to the colleague.
+- [ ] **Prototype in-guest VSS component requestor** — A2 path / "Mechanism E." POC scope: hardcoded MSSQL + `SqlServerWriter`, single SQL/Windows version. Drive via QGA-exec first. **Deferred design Q:** can it work via QGA freeze/thaw alone (no QGA-exec)? If yes, hook + VSS tracks collapse into one.
+- [ ] **Demo POC to Trilio engineering** — handoff so engineering productionizes a multi-DB component requestor (VSS writer-GUID enumeration → Exchange, AD DS, etc.). Sales narrative: "one mechanism → n databases" vs. per-DB Explorer-style integrations.
+- [ ] **Confluence article + blog** — org/customer narrative tying the hook mechanism + VSS POC together. Distinct from `docs/lab-guide.md` (which is the reproducibility guide for the today-proven path).
 
 ---
 
 ## Session State
 *(Updated at end of each session — read at start of each new session.)*
 
-### Last session: 2026-06-03 (S3 credential audit + colleague lab-guide queued)
+### Last session: 2026-06-07 (lab guide published; new POC tracks scoped)
 
 **Accomplished:**
-- Repo audit: confirmed S3 credentials never landed in the repo. `collateral/` gitignored from inception, never in history; no `AKIA`/`ASIA` prefixes, no `aws_access_key_id` / `aws_secret_access_key` anywhere in tracked files or in any commit (pickaxe across all branches). Bucket name + S3 URL appear only in `CLAUDE.md` — non-secret. Secret material lives only in (a) `collateral/aws-s3-bucket.txt` on Vince's Mac and (b) the SQL CREDENTIAL in the VM's `master` DB.
-- Next-session deliverable scoped: a **Confluence-style lab guide** that a Trilio colleague can follow end-to-end to reproduce the MVP scenario, starting from a post-`docs/windows-vm-prep.md` MSSQL VM in an OCP cluster of their choosing.
+- **`docs/lab-guide.md` shipped to public repo** — commit `a683311` on `origin/main`. 12-step reproducible end-to-end procedure (prep SQL → pre-anchor inserts → `COPY_ONLY .bak` on D: → Trilio Backup CR → post-anchor inserts → `BACKUP LOG TO URL` → cross-NS Restore CR → in-guest `RESTORE DB WITH NORECOVERY` + `RESTORE LOG WITH RECOVERY` → 16-row validation). Inline SQL + manifest YAML + troubleshooting + sequence diagram. Audience widened from "Trilio colleagues" to "anyone reproducing this lab." Scrubbed of internal taxonomy ("Mechanism C/D/E"), competitive ("Veeam"), and roadmap framing ("MVP-proper", "design target — not yet built", "BackupPlan v2"). Driver markers simplified from `[MANUAL-TODAY / HOOK-FUTURE]` to `[MANUAL]`.
+- **Internal-only companion docs parked in `private-docs/`** (gitignored): `flow.md` (readable end-to-end flow with driver markers, A1/A2 fork, pre/post workload-write callouts, manual-vs-automatic matrix) and `flow-prompt-claude-design.md` (self-contained prompt to feed Claude Design for a visual render of the flow).
+- **Anchor-ordering correction baked in.** Initial flow.md draft had the `COPY_ONLY .bak` *after* the Trilio backup; Exp 4 evidence (the anchor was at 19:55, backup started 19:55:23 with the anchor inside the data-disk snapshot) confirms anchor *before*. Fixed in both internal docs and reflected throughout the public lab guide.
+- **Pre/post workload writes promoted to first-class concepts.** New `[APP-WORKLOAD]` driver marker. Pre-anchor inserts prove VSS app-consistent capture; post-anchor inserts (recovered via log chain replay) prove true PITR, not crash-consistent rewind.
+- **Repo hygiene:** `*.pdf` added to `.gitignore` (local viewing renders never tracked). Verified no secrets in tracked files. `collateral/` and `private-docs/` correctly gitignored and contain no files leaking into history.
 
-**Durable lab state changes:** None. Mac-only audit; nothing touched in the cluster, VM, or S3.
+**Durable lab state changes:** None — Mac-side documentation work only. Cluster, VM, S3 untouched.
 
-**Eval clock:** grace ends **2026-06-03 16:27** (Windows-local on the VM — assume worker-node TZ, likely UTC). Today. 3 rearms remain after current; plan a rearm before the next deep work session if it runs past that mark.
+**Eval clock:** Last known grace end **2026-06-03 16:27** (per 2026-06-03 session). Today is 4 days past. **VM state unverified.** Run `slmgr /xpr` before next lab session; 3 rearms remain after current.
+
+**New direction (the work that feeds the future Confluence article + blog):**
+- **Trilio hooks into virt-launcher pod** to automate the `[MANUAL]` SQL steps. Today's lab guide hands these to the colleague; product-grade behavior wires them into TVK lifecycle hooks driving QGA-exec.
+- **In-guest VSS component requestor POC** (A2 path / "Mechanism E"). Hardcoded MSSQL + `SqlServerWriter`, single SQL/Windows version. Quick-and-dirty.
+- **Deferred design Q:** can the in-guest requestor participate via QGA freeze/thaw alone (no QGA-exec)? If yes, the hook + VSS tracks collapse into one and there's no `guest-exec` dependency at all.
+- **Standalone VSS agent** (QGA-absent case) parked unless a customer asks for it.
+- POC results destined for handoff to Trilio engineering — productionized multi-DB component requestor enumerates VSS writers by GUID (Exchange, AD DS, Hyper-V, etc.). Sales narrative: "one mechanism → n databases" vs. per-DB Explorer-style integrations.
 
 **Open items for next session (priority order):**
-1. **Colleague-runnable lab guide (Confluence article)** — reproduces the MVP scenario end-to-end. Assumed starting state: VM built per `docs/windows-vm-prep.md` + an OCP cluster with TVK installed. Must include the YAML for every K8s manifest and the SQL/PowerShell scripts the colleague will run.
-   - **Manifests to include** (drawn from `manifests/`): `backupplan.yaml`, `backup.yaml`, `restore.yaml` (`type: Location`, cross-NS), `restore-access-services.yaml` (NodePort SSH/RDP into the restored VM; flagged as transitional until BackupPlan v2 Routes work lands).
-   - **SQL/PowerShell scripts** to script-ify and ship alongside the guide:
-     - Verify `demo_db` Full recovery model (default in our install, but check).
-     - `ALTER SERVER ROLE sysadmin ADD MEMBER [NT AUTHORITY\SYSTEM]` (Exp 2 finding) — note customer-prod recommendation is a least-privilege login instead.
-     - `CREATE CREDENTIAL` in `master` for `s3://<bucket>.s3.<region>.amazonaws.com/<prefix>` using the colleague's own AWS keys.
-     - `dbo.writes` table + seeding (pre-anchor inserts).
-     - The Exp 4 chain: Trilio Backup CR → `BACKUP DATABASE ... WITH COPY_ONLY` anchor on `D:\SQLBackup\` → post-anchor inserts → `BACKUP LOG ... TO URL='s3://...'`.
-     - QGA-driven exec wrapper pattern (`virsh qemu-agent-command ... guest-exec` → `sqlcmd -S .\MSSQLSERVER01 -E -C`) — both `oc`-side and from-the-host variants if the colleague is on a non-PX cluster.
-     - Cross-NS restore via Trilio Restore CR → in-guest `RESTORE DATABASE ... WITH NORECOVERY, REPLACE` → `RESTORE LOG ... WITH RECOVERY` → row-count + timestamp verification SQL.
-   - **Sequence ordering** matters: the colleague must see freeze/thaw events in the original VM during the Trilio backup, take the anchor `.bak` *after* the Trilio backup completes, and only then resume post-anchor inserts. The guide should make that ordering explicit.
-   - **Cluster portability caveats** the guide must call out: storage class is environment-specific (we used `px-csi-replicated` + `px-csi-snapclass`; colleagues on ODF/Ceph or vSphere CSI will substitute their own); BackupPlan target name + secret will differ; NodePort port numbers will need to be picked locally; eval-Windows rearm caveat for long-running labs.
-   - **Output location:** `docs/lab-guide.md` is the working assumption (single Confluence-pageable file). Scripts probably co-located in `lab/sql/` and `lab/scripts/` so the guide can `--include` or just reference them.
-   - **Open scoping question** for next session: should the guide stop at Exp 4 (Mechanism C end-to-end), or also walk through the negative control (QGA stopped → crash-consistent gap) for pedagogical contrast? Vince to decide.
-2. **Send internal status email + customer response to Erick** — drafts at `private-docs/2026-06-01-internal-status-draft.md` and `private-docs/2026-06-01-erick-reply-draft.md` (recipients + Cc in those files). Order: internal first; ~24h review window; then Erick reply with the AE on Cc. One open verbiage check: confirm `RTO: Zero (CR) to data-transfer-bound` reads as intended to the internal audience (could expand `CR` if ambiguous).
-3. **Python write generator** — for continuous workload; needed for backup-under-load test.
-4. **Backup #2 under load** — depends on (3). Verifies torn-write robustness of the freeze/thaw under sustained pressure.
-5. **FLR demo** — pull `.mdf` / `.ldf` / `.bak` via Trilio UI/CLI; helper-pod path likely needed.
-6. **BackupPlan v2** — Routes + restore-time host-rewrite transform (replaces ephemeral NodePort plumbing). Relevant to (1): if v2 lands first, the lab guide should use Routes instead of NodePort.
-7. **Bake parked `docs/windows-vm-prep.md` updates** (5 items — see Project Status checkbox).
+1. **Prototype Trilio hook into virt-launcher pod** — wire one lifecycle hook to drive a pre-backup `BACKUP DATABASE WITH COPY_ONLY` via QGA-exec. Verify the `.bak` lands on `D:\SQLBackup\` *before* the snapshot fires (same Path-A pattern as Exp 4, but operator-driven instead of hand-run).
+2. **Prototype in-guest VSS component requestor** — Windows binary against VSS COM APIs (`SqlServerWriter`, hardcoded). Drive via QGA-exec. Capture backup component document. Verify restore-side `IVssBackupComponents::PreRestore` + `SetAdditionalRestores(true)` lands `demo_db` in `RESTORING`.
+3. **Deferred design Q (pondering, not building):** does the in-guest requestor participate via QGA freeze/thaw alone, no QGA-exec? If yes, (1) and (2) collapse.
+4. **Demo POC to Trilio engineering** — once (1) and (2) work end-to-end. Handoff for productionization.
+5. **Send internal status email + Erick reply** — drafts at `private-docs/2026-06-01-internal-status-draft.md` and `2026-06-01-erick-reply-draft.md`. **Calibration question:** does the new POC framing shift what we tell Erick about timing? Mechanism C is shipping-grade as of Exp 4; the hook + VSS POC tracks are weeks-out.
+6. **Python write generator** + **backup #2 under load** (dependent on the generator). Stress test the freeze/thaw under sustained writes.
+7. **FLR demo** — pull `.mdf` / `.ldf` / `.bak` via Trilio UI/CLI; helper-pod path likely needed.
+8. **BackupPlan v2** (Routes + restore-time host-rewrite). May be obviated by (1); revisit after (1) proves out.
+9. **Bake parked `docs/windows-vm-prep.md` updates** (5 items — see Project Status checkbox).
+10. **Confluence article + blog** — depends on (1) and (2) demonstrating end-to-end. Distinct from `docs/lab-guide.md`.
 
 ---
 
-### Previous session: 2026-06-01 (Exp 4 PASS — Mechanism C end-to-end proven)
+### Previous session: 2026-06-03 (S3 credential audit + colleague lab-guide queued)
 
 **Accomplished:**
-- **Exp 4 ✓** — full Path A chain validated: Trilio backup (7m31s/19.7 GiB) + COPY_ONLY `.bak` anchor on D: + post-anchor `BACKUP LOG TO URL` → cross-NS restore (9m10s) → in-guest `RESTORE DB WITH NORECOVERY` + `RESTORE LOG WITH RECOVERY` (~300 ms) → final 16 rows = 1 smoke + 10 pre + 5 post. Post-anchor timestamps preserved end-to-end (proves log replay, not crash-consistent rewind). VSS handshake signature on backup #2 matches backup #1. See Project Status entry + `output/exp4-summary.md`.
-- **Internal status email + customer response to Erick** drafted and saved to `private-docs/2026-06-01-internal-status-draft.md` and `private-docs/2026-06-01-erick-reply-draft.md` (both gitignored). Internal calls out Veeam explicitly + the OCP-PX→NFS / S3 log-shipping shape; external avoids internal numbers and competitor names (Florida public-records law makes Erick's mailbox FOIA-able). Opportunity ask was sharpened from Vince's prior reply — Erick didn't engage on the soft version. Not yet sent.
+- Repo audit: confirmed S3 credentials never landed in the repo. `collateral/` gitignored from inception; no `AKIA`/`ASIA` prefixes, no `aws_access_key_id` / `aws_secret_access_key` anywhere in tracked files or any commit (pickaxe across all branches). Bucket name + S3 URL appear only in `CLAUDE.md` — non-secret. Secret material lives only in (a) `collateral/aws-s3-bucket.txt` on Vince's Mac and (b) the SQL CREDENTIAL in the VM's `master` DB.
+- Next-session deliverable scoped: a Confluence-style lab guide reproducing the Exp 4 chain end-to-end. **Delivered 2026-06-07 as `docs/lab-guide.md`** (commit `a683311`).
 
-**Durable lab state changes:**
-- `dbo.writes` on original VM has **16 rows** (1 smoke + 10 `exp4-pre-anchor-N` + 5 `exp4-post-anchor-N`).
-- Artifacts: `D:\SQLBackup\demo_db_exp4_anchor.bak` (4.45 MB, COPY_ONLY) on original VM; `s3://mssql-vss-lab/lab/demo_db_exp4.trn` (266 KB) in S3. Exp 3's `demo_db_exp3.trn` kept as evidence.
-- Trilio backup `mssql-vss-backup-kcxdl` exists on `sa-nfs-cr-demo` alongside `mssql-vss-backup-2phcr`. Retention is "latest 5" — both safe for now.
-- `mssql-vss-restore-exp4` namespace torn down after evidence captured (restored VM gone). `mssql-vss-restore` (from 2026-05-28) still Running, untouched.
-- Windows Application log was cleared as pre-flight at 2026-06-01 ~19:53Z; current events are all from the Exp 4 backup onward.
-
-**Lab state at end of 2026-06-01 (still current as of 2026-06-03):**
-- Cluster: `ocp-px` (context `mssql-vss-lab/api-ocp-px-demo-presales-trilio-io:6443/kube:admin`).
-- `mssql-vss-lab/win2k22-aqua-junglefowl-90` — Running on `worker-0-frqj5`. `demo_db` ONLINE (16 rows), Full recovery, SYSTEM sysadmin, S3 credential live.
-- `mssql-vss-restore/win2k22-aqua-junglefowl-90` — still Running from 2026-05-28 restore test; `demo_db` ONLINE with original smoke-test row intact.
-- Launcher pod (original VM): `virt-launcher-win2k22-aqua-junglefowl-90-nrtc7` — confirm with `oc get pods -n mssql-vss-lab` if needed (could roll).
-- Reach original VM: `ssh -i ~/.ssh/vbky-temp-key.pem -p 31256 administrator@172.31.1.56`.
-- QGA-driven exec pattern unchanged from previous session.
-- S3: `s3://mssql-vss-lab/lab/` (us-east-1); creds in `collateral/aws-s3-bucket.txt`.
+**Durable lab state changes:** None. Mac-only audit; nothing touched in the cluster, VM, or S3.
 
 ---
 
 ### Earlier sessions
-*2026-05-29 (MVP-validation Exp 1–3: Full recovery already set, QGA-as-SYSTEM drives sqlcmd with SYSTEM granted sysadmin, `BACKUP LOG TO URL='s3://...'` round-trip validated via `RESTORE HEADERONLY` — durable artifacts: SYSTEM-sysadmin on `MSSQLSERVER01`, SQL CREDENTIAL in master, AWS keys in `collateral/aws-s3-bucket.txt`, `s3://mssql-vss-lab/lab/demo_db_exp3.trn`), 2026-05-28 (cross-NS restore validated + QGA/VSS diagnostic — `mssql-vss-backup-2phcr` → `mssql-vss-restore`, 7m 59s, freeze/thaw IDs corrected to 3197/3198), 2026-05-25 (data disk online as D: + SQL paths relocated + backup #1 `mssql-vss-backup-2phcr` at 7m 52s / 17.85 GiB) and bootstrap (2026-05-06) → cluster/VM stand-up (2026-05-07/08) have aged out of context relevance. Durable facts live in **Project Status**; journey is in `git log` and `output/` artifacts. Notable historic notes baked into `docs/windows-vm-prep.md`: Secure Boot off for the golden image, stuck-stop ghost-record recovery, service-selector gotcha, Sysprep password placeholder, Datacenter-Eval `slmgr /rearm` quirk.*
+*2026-06-01 (Exp 4 PASS — full Path A end-to-end log-replay restore validated: Trilio backup `mssql-vss-backup-kcxdl` 7m31s/19.7 GiB + `COPY_ONLY .bak` on D: + post-anchor `BACKUP LOG TO URL` → cross-NS restore 9m10s → in-guest `RESTORE DB WITH NORECOVERY` + `RESTORE LOG WITH RECOVERY` ~300ms → final 16 rows = 1 smoke + 10 pre-anchor + 5 post-anchor; post-anchor timestamps preserved. Internal status + Erick reply email drafts staged at `private-docs/2026-06-01-*.md`, not yet sent.), 2026-05-29 (MVP-validation Exp 1–3: Full recovery already set, QGA-as-SYSTEM drives sqlcmd with SYSTEM granted sysadmin, `BACKUP LOG TO URL='s3://...'` round-trip validated via `RESTORE HEADERONLY` — durable artifacts: SYSTEM-sysadmin on `MSSQLSERVER01`, SQL CREDENTIAL in master, AWS keys in `collateral/aws-s3-bucket.txt`), 2026-05-28 (cross-NS restore validated + QGA/VSS diagnostic — `mssql-vss-backup-2phcr` → `mssql-vss-restore`, 7m 59s, freeze/thaw IDs corrected to 3197/3198), 2026-05-25 (data disk online as D: + SQL paths relocated + backup #1 `mssql-vss-backup-2phcr` at 7m 52s / 17.85 GiB) and bootstrap (2026-05-06) → cluster/VM stand-up (2026-05-07/08) have aged out of context relevance. Durable facts live in **Project Status**; journey is in `git log` and `output/` artifacts. Notable historic notes baked into `docs/windows-vm-prep.md`: Secure Boot off for the golden image, stuck-stop ghost-record recovery, service-selector gotcha, Sysprep password placeholder, Datacenter-Eval `slmgr /rearm` quirk.*
+
+**Persistent lab state (current as of 2026-06-01; not re-verified since — re-check before next deep work):**
+- Cluster: `ocp-px` (context `mssql-vss-lab/api-ocp-px-demo-presales-trilio-io:6443/kube:admin`).
+- `mssql-vss-lab/win2k22-aqua-junglefowl-90` — last known Running on `worker-0-frqj5`. `demo_db` ONLINE (16 rows), Full recovery, SYSTEM sysadmin, S3 credential live. **Eval clock past 2026-06-03 grace; verify state.**
+- `mssql-vss-restore/win2k22-aqua-junglefowl-90` — still Running from 2026-05-28 restore test (untouched).
+- Reach original VM: `ssh -i ~/.ssh/vbky-temp-key.pem -p 31256 administrator@172.31.1.56`.
+- QGA-driven exec pattern: `virsh qemu-agent-command <vm> '{"execute":"guest-exec",...}'` via `oc exec` into virt-launcher pod, or directly on worker.
+- S3: `s3://mssql-vss-lab/lab/` (us-east-1); creds in `collateral/aws-s3-bucket.txt`.
