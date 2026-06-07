@@ -22,6 +22,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 
+# PDFs — local viewing renders of markdown sources; never commit
+*.pdf
+
 # VSCode
 .vscode/settings.json
 
