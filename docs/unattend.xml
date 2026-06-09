@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+================================================================================
+  unattend.xml — MSSQL-on-OCPv lab VM, Windows Server 2022
+================================================================================
+
+  Purpose
+  =======
+  Sysprep answer file used by the OpenShift Virtualization VM catalog when
+  cloning a Windows Server 2022 golden image. Drives the VM from "raw clone"
+  to "boots to desktop with the data disk formatted and RDP reachable" with
+  no manual post-boot steps.
+
+  Sysprep runs three passes against this file: generalize, specialize, and
+  oobeSystem. Each <settings pass="..."> block applies to one pass. The
+  oobeSystem pass also runs the <FirstLogonCommands> in numerical Order
+  (1, 2, 3, ...) the first time the Administrator account logs in.
+
+  Scope and out-of-scope
+  ======================
+  IN scope (handled automatically by this unattend):
+    - Eval-to-Datacenter edition conversion (best-effort).
+    - Data-disk initialization and formatting as D:\DATA.
+    - RDP firewall + fDenyTSConnections.
+
+  OUT of scope (manual post-boot, documented in docs/windows-vm-prep.md):
+    - OpenSSH Server install. The robust install path depends on what your
+      cluster lets the VM reach (Microsoft Update for `Add-WindowsCapability`
+      vs. github.com for the prebuilt zip vs. neither, in which case an
+      RDP drag-and-drop fallback is used). § 4e of the prep doc covers all
+      three paths; doing it post-boot keeps this file portable across
+      egress-restricted environments.
+
+  Before you use this file
+  ========================
+  1. Replace BOTH occurrences of YOUR-LAB-PASSWORD below with a real
+     throwaway lab password. The AutoLogon password and the
+     AdministratorPassword MUST match — if they don't, you'll boot to the
+     Windows logon screen instead of straight to the desktop.
+  2. Confirm the VM has TWO disks attached at boot: the 60+ GiB OS disk
+     (cloned from the golden image) and a separate blank 40 GiB data disk.
+     Order 1 (FirstLogonCommand) initializes the second disk as D:\DATA.
+  3. The VM keyboard layout, time zone, and locale are hardcoded for
+     en-US / Eastern Standard Time below. Adjust for your environment.
+
+  History of pain encoded in this file
+  ====================================
+  - CD-letter race (2026-06-08): KubeVirt attaches `virtio-win` and
+    `unattendCD` as CD-ROMs at boot. Windows grabs D: and E: for them
+    before FirstLogonCommands run. The original Order 1 used
+    `New-Partition -DriveLetter D` and silently failed because D: was
+    already taken. Fixed by moving CDs off D:/E: at the start of Order 1
+    before touching the data disk.
+  - DISM-broken golden images (2026-06-08): Some captures of the
+    engineering golden image have a corrupt servicing stack — `Add-
+    WindowsCapability OpenSSH.Server` reports `Installed` but the binaries
+    are never deployed, and `dism /Set-Edition` silently no-ops. We keep
+    the DISM Set-Edition fallback in Order 2 because it's idempotent
+    (no-op when broken); not safe to assume it actually converted the
+    edition.
+  - GitHub-download OpenSSH install removed from this unattend (2026-06-08):
+    An earlier revision (Orders 4-6) downloaded OpenSSH-Win64.zip from
+    github.com on first boot. Two problems killed that approach:
+    (a) `api.github.com` is commonly allow-listed while the download CDN
+        (`objects.githubusercontent.com`) is blocked; the chain hung
+        without timing out cleanly.
+    (b) The FirstLogonCommands chain halted between Order 3 and Order 4
+        on the test image, leaving 4-6 unfired with no diagnostic surface.
+    Moved SSH install to a manual § 4e post-boot step with three install
+    paths (capability install / GitHub zip / RDP drag-and-drop). Keeps
+    this file portable.
+================================================================================
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+
+  <!--
+  ============================================================================
+    Pass 1: generalize (runs during `sysprep /generalize`)
+  ============================================================================
+  -->
+  <settings pass="generalize">
+    <!--
+      Protect the limited eval-rearm count. If a future Sysprep re-runs
+      against this VM, don't burn one of the 5 total rearms. Cheap insurance.
+    -->
+    <component name="Microsoft-Windows-Security-SPP"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <SkipRearm>1</SkipRearm>
+    </component>
+  </settings>
+
+  <!--
+  ============================================================================
+    Pass 2: specialize (runs once during first boot, before user login)
+  ============================================================================
+  -->
+  <settings pass="specialize">
+    <!--
+      Server 2022 Datacenter GVLK (public Microsoft KMS Client Setup Key).
+      NOT a license — it tells Sysprep which target edition to convert the
+      Eval install into. On a healthy install the edition flips from
+      ServerDatacenterEval to ServerDatacenter here. On a DISM-broken
+      install this is a no-op; Order 2 below tries again, also best-effort.
+      Reference:
+      learn.microsoft.com/windows-server/get-started/kms-client-activation-keys
+    -->
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <ProductKey>WX4NM-KYWYW-QJJR4-XV3QB-6VM33</ProductKey>
+    </component>
+
+    <!--
+      Extend the OS partition (C:) to consume all unallocated space on
+      the OS disk. The golden image is captured smaller than the cloned
+      DV; this grows C: to fill the actual provisioned size.
+    -->
+    <component name="Microsoft-Windows-Deployment"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <ExtendOSPartition><Extend>true</Extend></ExtendOSPartition>
+    </component>
+  </settings>
+
+  <!--
+  ============================================================================
+    Pass 3: oobeSystem (skip the OOBE wizard + first-login automation)
+  ============================================================================
+  -->
+  <settings pass="oobeSystem">
+    <component xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+
+      <!-- Skip every wizard page. Boot straight to desktop. -->
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <NetworkLocation>Work</NetworkLocation>
+        <SkipUserOOBE>true</SkipUserOOBE>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+
+      <!--
+        AutoLogon: log Administrator in automatically on first boot so
+        FirstLogonCommands actually fires. The Password here MUST match
+        the AdministratorPassword below — if they differ, AutoLogon fails
+        and you'll see the lock screen instead.
+      -->
+      <AutoLogon>
+        <Password><Value>YOUR-LAB-PASSWORD</Value><PlainText>true</PlainText></Password>
+        <Enabled>true</Enabled>
+        <Username>Administrator</Username>
+      </AutoLogon>
+
+      <!-- Set the Administrator account password. Must match AutoLogon above. -->
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value>YOUR-LAB-PASSWORD</Value><PlainText>true</PlainText>
+        </AdministratorPassword>
+      </UserAccounts>
+
+      <RegisteredOrganization/>
+      <RegisteredOwner/>
+      <TimeZone>Eastern Standard Time</TimeZone>
+
+      <!--
+        ==================================================================
+        FirstLogonCommands — run on first Administrator login, in Order.
+        Synchronous: command N+1 doesn't start until command N exits.
+        A nonzero exit DOES NOT halt the chain — subsequent commands still
+        run. Logs land in C:\Windows\Panther\UnattendGC\setupact.log.
+        ==================================================================
+      -->
+      <FirstLogonCommands>
+
+        <!--
+        ============================================================
+        Order 1 — Disk init: move CDs off D:/E:, then format data disk as D:
+        ============================================================
+        Why the CD-shuffle first: KubeVirt attaches `virtio-win` and
+        `unattendCD` as CD-ROMs, and Windows hands them D: and E: at
+        boot before this command runs. If we go straight to
+        `New-Partition -DriveLetter D` it errors "drive letter D in use"
+        and the entire pipeline aborts — leaving the data disk
+        initialized (with just the GPT MSR partition) but with no
+        usable D: volume.
+
+        DriveType=5 means CD-ROM in Win32_Volume; the filter is
+        deliberately narrow so we don't accidentally move a fixed disk
+        if a user has unusual letter assignments.
+        ============================================================
+        -->
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Volume | Where-Object { $_.DriveLetter -eq 'D:' -and $_.DriveType -eq 5 } | ForEach-Object { Set-CimInstance -InputObject $_ -Property @{DriveLetter='X:'} }; Get-CimInstance Win32_Volume | Where-Object { $_.DriveLetter -eq 'E:' -and $_.DriveType -eq 5 } | ForEach-Object { Set-CimInstance -InputObject $_ -Property @{DriveLetter='Y:'} }; Get-Disk | Where-Object { $_.PartitionStyle -eq 'RAW' -or $_.PartitionStyle -eq 'Uninitialized' } | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -UseMaximumSize -DriveLetter D | Format-Volume -FileSystem NTFS -NewFileSystemLabel DATA -Confirm:$false -Force"</CommandLine>
+          <Description>Move CD-ROMs off D:/E:, then initialize and format data disk as D: NTFS DATA</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <!--
+        ============================================================
+        Order 2 — Edition conversion fallback (best-effort)
+        ============================================================
+        The specialize-pass <ProductKey> SHOULD have already flipped
+        the install from ServerDatacenterEval to ServerDatacenter.
+        This is a belt-and-suspenders fallback: if findstr still finds
+        "ServerDatacenterEval" in the current edition, run dism's
+        Set-Edition. The `&amp;&amp;` short-circuits so dism is skipped
+        if the conversion already happened.
+
+        Caveat: on DISM-broken images (observed 2026-06-08),
+        `dism /Get-CurrentEdition` itself errors with "file not
+        found." findstr will not match the eval string and dism
+        won't run — leaving the install on the 10-day eval grace
+        loop. Recoverable via `slmgr /rearm`; documented in the
+        prep doc.
+        ============================================================
+        -->
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <CommandLine>cmd /c "dism /online /Get-CurrentEdition | findstr /i ServerDatacenterEval &amp;&amp; dism /online /Set-Edition:ServerDatacenter /ProductKey:WX4NM-KYWYW-QJJR4-XV3QB-6VM33 /AcceptEula /NoRestart"</CommandLine>
+          <Description>Best-effort Eval to Datacenter conversion. No-op on DISM-broken images.</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <!--
+        ============================================================
+        Order 3 — Enable RDP
+        ============================================================
+        Two things needed for RDP to work: firewall rule open
+        ("Remote Desktop" rule group) and the registry flag
+        fDenyTSConnections set to 0 (allows incoming RDP connections).
+        File and Printer Sharing is enabled too so ping/SMB diagnostics
+        work from the host network.
+        ============================================================
+        -->
+        <SynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "Enable-NetFirewallRule -DisplayGroup 'File and Printer Sharing'; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'; Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0"</CommandLine>
+          <Description>Enable RDP firewall rule and turn off fDenyTSConnections</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <!--
+        ============================================================
+        OpenSSH Server install is intentionally NOT done here.
+        ============================================================
+        An earlier revision had Orders 4-6 download OpenSSH-Win64.zip
+        from github.com and register the service. Two problems forced
+        the move to a manual post-boot install:
+          1. Many clusters allow `api.github.com` but block the
+             release-download CDN (`objects.githubusercontent.com`),
+             causing the download to hang past Sysprep's per-command
+             window.
+          2. On the test image, the FirstLogonCommands chain halted
+             between Order 3 and Order 4 with no diagnostic surface,
+             leaving Orders 4-6 unfired even when the download URL
+             was reachable.
+
+        OpenSSH install is now a manual step. See
+        docs/windows-vm-prep.md section 4e for three install paths
+        (capability install / GitHub zip / RDP drag-and-drop) and
+        pick whichever matches your cluster's egress posture.
+        ============================================================
+        -->
+
+
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>

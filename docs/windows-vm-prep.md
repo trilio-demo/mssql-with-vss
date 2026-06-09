@@ -1,81 +1,99 @@
 # Windows VM Prep — Reference Guide
 
-Standalone reference for preparing the Windows Server 2022 VM that will host
-MS SQL Server for this lab on `ocp-px`. Follows engineering's golden-image
-flow (collateral). Run through it once and the next Claude Code session can
-pick up at "configure Trilio backup target + write the generator."
+Standalone reference for preparing a Windows Server 2022 VM on OpenShift
+Virtualization to host MS SQL Server for the Trilio-VSS lab. Designed to be
+reused across OpenShift clusters and storage backends.
 
 ## Goal
 
-A fresh Windows Server **2022** VM in a fresh namespace on `ocp-px`, built
-from engineering's **golden image**, with:
+A fresh Windows Server **2022** VM in a fresh namespace on your OCPv cluster,
+cloned from a Windows Server 2022 golden image, with:
 
 - A separate data disk (`D:`) for SQL data files (clean FLR story).
 - **QEMU Guest Agent (QGA)** running — what Trilio signals to drive Windows VSS.
-- **RDP (3389)** and **OpenSSH Server (22)** both enabled, reachable from your Mac.
-- **MS SQL Server Developer Edition** + **SSMS** installed, with the
+- **RDP (3389)** and **OpenSSH Server (22)** both up automatically on first
+  boot, reachable from your workstation.
+- **MS SQL Server Developer Edition** installed, with the
   **`SQLWriter`** service running.
 
 ## Prerequisites
 
-- `oc` and **`virtctl`** CLI installed locally; logged in to `ocp-px` as
-  cluster-admin (or sufficient role for `openshift-virtualization-os-images`).
-- The Windows Server 2022 golden image (`win2k22.img`) downloaded from the
-  engineering Drive folder (URL in your earlier conversation). Save it
-  locally — `~/Downloads/win2k22.img` is fine.
-- Cluster prereqs verified earlier in this project:
-  - OCPv (CNV) installed (`openshift-cnv`).
-  - Trilio operator installed.
-  - `px-csi-replicated` annotated as `is-default-virt-class=true`.
-  - Snapshot class `px-csi-snapclass` available.
+- `oc` and **`virtctl`** CLI installed locally; logged in to your OpenShift
+  cluster with permissions to write `DataVolume` resources in the
+  `openshift-virtualization-os-images` namespace.
+- A Windows Server 2022 golden image (`win2k22.img`) accessible locally.
+  Most teams capture this from a generalized Sysprep-ready VM; a sample
+  workflow is in the OpenShift Virtualization docs ("Creating a Windows VM
+  using a golden image").
+- Cluster prereqs:
+  - OpenShift Virtualization (CNV) installed (`openshift-cnv` namespace).
+  - Trilio operator installed (only needed once you get to the backup step).
+  - A CSI **block-mode** StorageClass with **VolumeSnapshot** support
+    (`is-default-virt-class=true` annotation makes the catalog flow easier).
+    Tested against Portworx (`px-csi-replicated` / `px-csi-snapclass`) and
+    TopoLVM (`lvms-topolvm-immediate`). Any CSI driver that supports
+    `VolumeSnapshotClass` should work.
+- VM egress requirements depend on which OpenSSH install path you pick in
+  § 4e. The unattend itself doesn't need any internet egress. See § 4e for
+  the three paths and their network requirements.
 
 > ### ⚠️ Heads-up: Windows Server evaluation clock
 >
-> The engineering golden image is a **Windows Server 2022 Datacenter
-> Evaluation** build (observed: build 20348, `fe_release.210507` from
-> 2021-05). The 180-day evaluation period starts when the image was
-> captured, **not** when you boot a clone — so the eval may already be
-> expired or close to it on first boot.
+> Most Windows Server 2022 golden images captured from a stock Microsoft ISO
+> are **Datacenter Evaluation** builds. The 180-day eval clock starts when
+> the image was captured, **not** when you boot a clone — so on a long-lived
+> golden image the eval is usually already expired before you ever provision
+> a VM from it. When eval expires, Windows force-reboots every ~60 minutes
+> (visible as a KubeVirt restart loop under `runStrategy: Always`).
 >
-> When eval expires, Windows force-reboots **every ~60 minutes**. Under
-> `runStrategy: Always` this looks like a KubeVirt restart loop in the
-> `virt-controller` logs (VMI moves to `Succeeded` ~1h after each start),
-> but the trigger is inside Windows, not KubeVirt.
->
-> Check and remediate on first boot (§ 4f below).
+> The Sysprep unattend in § 3 includes a `<ProductKey>` (Server 2022
+> Datacenter GVLK) + a DISM `Set-Edition` fallback that *attempts* to
+> convert the install out of Eval. On a healthy golden image this works and
+> the VM ends up as `ServerDatacenter` (KMS). On golden images with a
+> **broken DISM servicing stack** (observed on the engineering image this
+> project tested against), neither conversion fires and the VM stays on
+> Eval — `slmgr /rearm` then buys a fresh grace period (the rearm cycle
+> covers ~50 days of lab work; details in § 4f).
 
 ---
 
 ## 1. Upload the golden image as a DataVolume
 
-Lands in the shared catalog namespace `openshift-virtualization-os-images` on
-Portworx. Subsequent VM clones land on the virt-default class
-(`px-csi-replicated`).
+Lands in the shared catalog namespace `openshift-virtualization-os-images`.
+Subsequent VM clones land on the cluster's default virt StorageClass (the one
+annotated `is-default-virt-class=true`).
+
+Set two variables before running, then upload:
 
 ```bash
+# Absolute path to the golden-image file on your workstation.
+# Don't use `~` — tilde expansion is unreliable inside --image-path=~/...
+IMG_PATH="$HOME/Downloads/win2k22.img"
+
+# Block-mode, CSI snapshot-capable StorageClass on your cluster.
+# Examples: px-csi-replicated (Portworx), lvms-topolvm-immediate (TopoLVM),
+# ocs-storagecluster-ceph-rbd-virtualization (ODF).
+STORAGE_CLASS="<your-block-storage-class>"
+
 virtctl image-upload dv win2k22 \
   --size=20Gi \
-  --image-path=~/Downloads/win2k22.img \
-  --storage-class=px-csi-replicated \
+  --image-path="$IMG_PATH" \
+  --storage-class="$STORAGE_CLASS" \
   --access-mode=ReadWriteOnce \
   --volume-mode=block \
   --insecure \
   --namespace=openshift-virtualization-os-images
 ```
 
-> **Deviation from engineering's guide.** The original guide pins the upload
-> to `ocs-storagecluster-ceph-rbd-virtualization` (RWX block). On `ocp-px`
-> that class exists as an orphaned shell — no `cephcluster` CRD, no
-> `csi-rbdplugin-provisioner` pods, so PVCs against it stay Pending forever.
-> `px-csi-replicated` (RWO block) is `ocp-px`'s working equivalent for VM
-> disks; RWX isn't required for image upload (only one pod writes). Catalog
-> VM clones from this boot source work normally.
->
-> Worth flagging back to engineering if their guide is meant to be
-> cluster-agnostic.
+> **Why RWO block?** The image only needs to be written once (by the CDI
+> upload pod), then read by clone operations. RWX isn't required. If the
+> upload errors with "PVC not provisioned" against an RWX-only class, fall
+> back to RWO — orphaned RWX-only storage classes (ODF on clusters without
+> a `cephcluster` CRD, etc.) are a common cause.
 
-Expect this to take a while — the CDI upload-proxy throughput on `ocp-px`
-runs around 1 MB/s, so a 20 GiB upload can take hours. Track progress with:
+CDI upload-proxy throughput is highly cluster-dependent — anywhere from
+1 MB/s to 100 MB/s — so a 20 GiB upload can take minutes to hours. Track
+progress with:
 
 ```bash
 oc -n openshift-virtualization-os-images get dv win2k22 -w
@@ -120,9 +138,10 @@ In the OCP Console:
    > If you forgot this and the VM is already created, you can add it
    > post-create: Console → your VM → **Disks** tab → **Add disk** with the
    > same fields. Stop/start the VM after attaching (some attach flows are
-   > hot-add capable but it's cleaner to cycle). The post-boot RAW-disk
-   > format step in § 4b silently no-ops if no spare disk is present, so
-   > the absence is easy to miss until you try to install SQL on `D:`.
+   > hot-add capable but it's cleaner to cycle). The unattend's
+   > FirstLogonCommand only runs on first boot — if the disk wasn't present
+   > then, you'll need to format it manually post-attach (the one-liner is
+   > in § 4b's "No `D:` volume?" callout).
 5. Click **Customize VirtualMachine**.
 6. **Scripts** tab → **Sysprep** → paste the unattend XML below.
 7. **Untick "Start this VirtualMachine after creation"** so you can adjust
@@ -130,10 +149,10 @@ In the OCP Console:
 
 ### 3a. Disable Secure Boot before first boot
 
-The catalog template defaults to UEFI **with Secure Boot on**. The
-engineering team's golden image bootloader's signing chain doesn't match the
-keys OVMF's secboot variant trusts, so Secure Boot rejects it and the VM
-parks at the TianoCore splash. Patch it off before starting.
+The catalog template defaults to UEFI **with Secure Boot on**. Many Windows
+golden images carry a bootloader signing chain that doesn't match the keys
+OVMF's secboot variant trusts — Secure Boot rejects it and the VM parks at
+the TianoCore splash. Patch it off before starting.
 
 ```bash
 # Catalog templates generate a random VM name; grab it
@@ -159,60 +178,44 @@ virtctl start "$VM" -n mssql-vss-lab
 > connection: can not add ghost record`, restart virt-handler on the VM's
 > node: `oc -n openshift-cnv delete pod virt-handler-<id>`.
 
-### Sysprep `unattend.xml` (verbatim from engineering guide)
+### Sysprep `unattend.xml`
 
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
-  <settings pass="specialize">
-    <component name="Microsoft-Windows-Deployment"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral"
-               versionScope="nonSxS">
-      <ExtendOSPartition><Extend>true</Extend></ExtendOSPartition>
-    </component>
-  </settings>
-  <settings pass="oobeSystem">
-    <component
-      xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
-      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-      name="Microsoft-Windows-Shell-Setup"
-      processorArchitecture="amd64"
-      publicKeyToken="31bf3856ad364e35"
-      language="neutral"
-      versionScope="nonSxS">
-      <OOBE>
-        <HideEULAPage>true</HideEULAPage>
-        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
-        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-        <NetworkLocation>Work</NetworkLocation>
-        <SkipUserOOBE>true</SkipUserOOBE>
-        <SkipMachineOOBE>true</SkipMachineOOBE>
-        <ProtectYourPC>3</ProtectYourPC>
-      </OOBE>
-      <AutoLogon>
-        <Password><Value>YOUR-LAB-PASSWORD</Value><PlainText>true</PlainText></Password>
-        <Enabled>true</Enabled>
-        <Username>Administrator</Username>
-      </AutoLogon>
-      <UserAccounts>
-        <AdministratorPassword>
-          <Value>YOUR-LAB-PASSWORD</Value><PlainText>true</PlainText>
-        </AdministratorPassword>
-      </UserAccounts>
-      <TimeZone>Eastern Standard Time</TimeZone>
-    </component>
-  </settings>
-</unattend>
-```
+The canonical file is [`docs/unattend.xml`](unattend.xml) — heavily commented
+so anyone reusing it understands what each block does. Copy its contents
+verbatim into the Console's Sysprep field at step 6 above.
 
-> Replace **both** `<Value>YOUR-LAB-PASSWORD</Value>` blocks with the same
-> value before pasting. AutoLogon needs the `<AutoLogon>` password and the
-> `<UserAccounts><AdministratorPassword>` password to match — if they don't,
-> you boot to the Windows logon screen instead of straight to the desktop.
-> Throwaway VM, throwaway creds; don't reuse a real password.
+**Before you paste**, replace both `<Value>YOUR-LAB-PASSWORD</Value>` blocks
+with a real throwaway lab password. The `<AutoLogon>` password and the
+`<UserAccounts><AdministratorPassword>` MUST match — if they don't, you boot
+to the Windows logon screen instead of straight to the desktop.
+
+**What the unattend does:**
+
+| Pass | What | Why |
+|---|---|---|
+| `generalize` | `<SkipRearm>1</SkipRearm>` | Protects the limited eval-rearm count if a future Sysprep re-runs against this VM. |
+| `specialize` | `<ProductKey>` (Server 2022 Datacenter GVLK) | Converts the install from `ServerDatacenterEval` to `ServerDatacenter` (KMS). No more eval clock — on healthy images. |
+| `specialize` | `<ExtendOSPartition>` | Grows C: to consume all unallocated space on the cloned OS disk. |
+| `oobeSystem` | `<OOBE>` skip-everything flags | Skips every first-boot wizard page. Boots straight to desktop. |
+| `oobeSystem` | `<AutoLogon>` + `<AdministratorPassword>` | Logs Administrator in automatically so `FirstLogonCommands` actually fires. |
+
+**`FirstLogonCommands` run on first boot, in Order:**
+
+| Order | What | Why |
+|---|---|---|
+| 1 | Move CDs off `D:`/`E:`, then init/format data disk as `D:` NTFS DATA | Fixes the CD-letter race that breaks the data-disk init if `New-Partition -DriveLetter D` runs while the `virtio-win` CD-ROM is parked on `D:`. |
+| 2 | `dism /Set-Edition` fallback | Best-effort if the `specialize`-pass `<ProductKey>` didn't trigger conversion. No-op on broken-DISM golden images. |
+| 3 | Enable RDP firewall + `fDenyTSConnections=0` | RDP works immediately on first boot, no manual step. |
+
+**OpenSSH Server is NOT installed by the unattend.** Earlier revisions of
+this file had Orders 4-6 download `OpenSSH-Win64.zip` from GitHub. That
+approach broke in two ways on restricted-egress clusters: (a) clusters
+commonly allow `api.github.com` but block the release download CDN
+(`objects.githubusercontent.com`), and (b) on the test image, the
+`FirstLogonCommands` chain halted between Order 3 and Order 4 with no
+diagnostic surface, leaving Orders 4-6 unfired even when the download URL
+was reachable. SSH install is now a post-boot step with three install paths
+(§ 4e); choose whichever matches your cluster's egress posture.
 
 ## 4. First-boot post-config
 
@@ -230,52 +233,36 @@ Status: `Running`, StartType: `Automatic`. **If it's not running, stop here
 and figure out why.** No QGA → no VSS coordination → no application-consistent
 backup. The golden image should have it pre-installed.
 
-### 4b. Clear the CD drives and format the data disk
+### 4b. Verify the data disk and detach the CDs
 
-The OCPv catalog template attaches **two CD-ROMs** to the VM:
+The unattend's `FirstLogonCommands` (Order 1) auto-initializes the blank
+data disk as `D:` (NTFS, label `DATA`). Verify:
+
+```powershell
+Get-Volume -DriveLetter D
+```
+
+Expect `FileSystem: NTFS`, `FileSystemLabel: DATA`, `DriveType: Fixed`,
+free space ≈ the size you specified in § 3.4.
+
+> **No `D:` volume?** Two likely causes: (a) step 3.4 was skipped and there
+> is no blank data disk to initialize — `Get-Disk | Where-Object
+> PartitionStyle -in 'RAW','Uninitialized'` will return nothing; attach
+> a 40 GiB blank disk and re-run the FirstLogonCommand manually:
+> `Get-Disk | Where-Object {$_.PartitionStyle -eq 'RAW' -or $_.PartitionStyle -eq 'Uninitialized'} | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -UseMaximumSize -DriveLetter D | Format-Volume -FileSystem NTFS -NewFileSystemLabel DATA -Confirm:$false -Force`.
+> (b) Windows assigned `D:` to the virtio-win CD before the FirstLogonCommand
+> ran — detach the CDs (below), then re-run the disk init.
+
+**Detach the CDs.** The OCPv catalog template attaches two CD-ROMs:
 
 - `virtio-win-*` (containerDisk) — Balloon / NetKVM / viostor / vioscsi
-  drivers. Already installed by Sysprep; the CD is dead weight after first boot.
+  drivers. Already installed by Sysprep; dead weight after first boot.
 - `unattendCD` — the Sysprep `unattend.xml` you pasted in § 3. Only consumed
   on first boot.
 
-Windows grabs the first two free letters for them — observed: `D:` =
-virtio-win, `E:` = unattendCD. That eats the letter we want for the data
-disk. Clear them out:
-
-**Option A (clean):** detach both CDs from the VM via Console → your VM →
-**Disks** tab → kebab on `virtio-win` and `unattendCD` rows → **Detach**.
-This frees `D:` and `E:` permanently and removes installer noise. Recommended
-once first boot is done.
-
-**Option B (rename only):** if you'd rather keep the CDs attached, move
-their drive letters out of the way from PowerShell:
-
-```powershell
-# Move the virtio-win CD out of D:
-Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter='D:'" |
-  Set-CimInstance -Property @{DriveLetter='X:'}
-
-# Move the unattendCD out of E: (optional — only matters if you want E: free)
-Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter='E:'" |
-  Set-CimInstance -Property @{DriveLetter='Y:'}
-```
-
-Then initialize and format the data disk:
-
-```powershell
-Get-Disk | Where-Object PartitionStyle -eq 'RAW' |
-  Initialize-Disk -PartitionStyle GPT -PassThru |
-  New-Partition -DriveLetter D -UseMaximumSize |
-  Format-Volume -FileSystem NTFS -NewFileSystemLabel "Data" -Confirm:$false
-```
-
-> **No output / nothing happened?** `Get-Disk | Where-Object PartitionStyle
-> -eq 'RAW'` silently returns nothing if there is no spare disk — meaning
-> step 3.4 (Add disk) was skipped. Verify in **This PC** that `D:` exists
-> after the format; if not, go back and attach the 40 GiB blank disk.
-
-`D:` should now exist and be empty.
+Console → your VM → **Disks** tab → kebab on `virtio-win` and `unattendCD`
+rows → **Detach**. Removes installer noise and prevents drive-letter
+contention on subsequent reboots.
 
 ### 4c. Set hostname (forces a reboot)
 
@@ -285,31 +272,136 @@ Rename-Computer -NewName "mssql-lab" -Force -Restart
 
 Continue at 4d after the reboot.
 
-### 4d. Enable RDP
+### 4d. Verify RDP
+
+The unattend's `FirstLogonCommands` (Order 3) already enabled the firewall
+rule and set `fDenyTSConnections=0`. Verify:
 
 ```powershell
-Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-  -Name 'fDenyTSConnections' -Value 0
+(Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server').fDenyTSConnections   # expect 0
+Get-NetFirewallRule -DisplayGroup 'Remote Desktop' | Where-Object Enabled -eq True | Measure-Object | Select-Object -Expand Count   # expect > 0
+```
+
+If either is wrong (rare — unattend Order 3 didn't fire), re-run:
+
+```powershell
+Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 ```
 
-### 4e. Enable OpenSSH Server
+### 4e. Install OpenSSH Server
+
+The unattend in § 3 deliberately does **not** install OpenSSH — install paths
+are too cluster-egress-dependent to bake into a one-size-fits-all answer
+file. Pick the path that matches what your VM can reach:
+
+| Path | When to use | Requires VM egress to |
+|---|---|---|
+| **A. Capability install** (preferred) | Healthy golden image, cluster allows Microsoft Update | `*.windowsupdate.com`, `*.windows.com` |
+| **B. GitHub zip** | Broken DISM (capability state lies) or no Microsoft Update egress, but cluster allows GitHub | `api.github.com` AND `objects.githubusercontent.com` / `github.com` |
+| **C. RDP drag-and-drop** | Locked-down cluster; nothing on the public internet is reachable | None — the file moves over the RDP channel |
+
+Run Path A first; if it fails, fall back to B; if both are blocked, use C.
+
+#### Path A — `Add-WindowsCapability` (Microsoft Update path)
 
 ```powershell
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-Start-Service sshd
-Set-Service -Name sshd -StartupType 'Automatic'
-
-if (-not (Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
-        -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
-}
-
-# Default SSH shell -> PowerShell (instead of cmd.exe)
-New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell `
-    -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
-    -PropertyType String -Force
+Test-Path 'C:\Windows\System32\OpenSSH\sshd.exe'   # MUST return True
 ```
+
+> **Trust but verify.** On DISM-broken golden images we've seen this command
+> report success and the capability state move to `Installed`, but `sshd.exe`
+> never lands on disk. If `Test-Path` returns False, treat Path A as failed
+> and move to Path B.
+
+If `sshd.exe` is present, register and start:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File 'C:\Windows\System32\OpenSSH\install-sshd.ps1'
+```
+
+Then run the [common service registration block](#common-service-registration)
+below.
+
+#### Path B — GitHub `OpenSSH-Win64.zip` download (in-VM)
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$r = Invoke-RestMethod -Uri 'https://api.github.com/repos/PowerShell/Win32-OpenSSH/releases/latest' -UseBasicParsing -Headers @{ 'User-Agent' = 'curl' }
+$a = $r.assets | Where-Object name -eq 'OpenSSH-Win64.zip'
+$zip = 'C:\Windows\Temp\OpenSSH-Win64.zip'
+Invoke-WebRequest -Uri $a.browser_download_url -OutFile $zip -UseBasicParsing -TimeoutSec 300
+if (Test-Path 'C:\Program Files\OpenSSH') { Remove-Item 'C:\Program Files\OpenSSH' -Recurse -Force }
+Expand-Archive -Path $zip -DestinationPath 'C:\Program Files' -Force
+Rename-Item 'C:\Program Files\OpenSSH-Win64' 'C:\Program Files\OpenSSH'
+powershell.exe -ExecutionPolicy Bypass -File 'C:\Program Files\OpenSSH\install-sshd.ps1'
+```
+
+> **If `Invoke-WebRequest` hangs**, you've probably hit the
+> `api.github.com`-allowed-but-CDN-blocked egress pattern. Confirm with:
+> ```powershell
+> Test-NetConnection api.github.com -Port 443 -InformationLevel Quiet
+> Test-NetConnection objects.githubusercontent.com -Port 443 -InformationLevel Quiet
+> ```
+> If the second returns False, drop to Path C.
+
+Then run the [common service registration block](#common-service-registration)
+below.
+
+#### Path C — RDP drag-and-drop (no in-VM egress required)
+
+On your workstation, download the zip:
+
+```bash
+WORKSTATION_DOWNLOAD_DIR="$HOME/Downloads"
+curl -fsSL \
+  -o "$WORKSTATION_DOWNLOAD_DIR/OpenSSH-Win64.zip" \
+  https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip
+```
+
+RDP into the VM as Administrator. Drag `OpenSSH-Win64.zip` from your local
+file manager into the RDP window — it lands on the Windows desktop. (Most
+RDP clients support this; if yours doesn't, copy the file in your file
+manager, click into the RDP File Explorer, and paste.)
+
+Then in the VM PowerShell:
+
+```powershell
+$zip = "$env:USERPROFILE\Desktop\OpenSSH-Win64.zip"
+Test-Path $zip   # MUST be True
+if (Test-Path 'C:\Program Files\OpenSSH') { Remove-Item 'C:\Program Files\OpenSSH' -Recurse -Force }
+Expand-Archive -Path $zip -DestinationPath 'C:\Program Files' -Force
+Rename-Item 'C:\Program Files\OpenSSH-Win64' 'C:\Program Files\OpenSSH'
+powershell.exe -ExecutionPolicy Bypass -File 'C:\Program Files\OpenSSH\install-sshd.ps1'
+```
+
+Then run the common service registration block below.
+
+#### Common service registration
+
+After any of Paths A/B/C has placed binaries on disk and run `install-sshd.ps1`,
+finish with:
+
+```powershell
+Set-Service -Name sshd -StartupType Automatic
+Start-Service sshd
+if (-not (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)) {
+  New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' `
+    -DisplayName 'OpenSSH Server (sshd)' `
+    -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
+}
+New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell `
+  -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
+  -PropertyType String -Force | Out-Null
+
+Get-Service sshd | Format-List Name, Status, StartType
+Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' | Format-List Name, Enabled, Direction, Action
+```
+
+Expect `Status: Running`, `StartType: Automatic`, and the firewall rule
+present with `Enabled: True`.
 
 #### Public-key auth (recommended)
 
@@ -326,10 +418,15 @@ C:\ProgramData\ssh\administrators_authorized_keys
 > falls back to password auth (key login just fails with no useful error).
 > Always write this file as plain ASCII.
 
-On your Mac, copy the public key to clipboard:
+On your workstation, copy the public key to clipboard:
 
 ```bash
-pbcopy < ~/.ssh/id_ed25519.pub   # or whichever key you use
+# macOS
+pbcopy < "$HOME/.ssh/id_ed25519.pub"
+# Linux (Wayland)
+wl-copy < "$HOME/.ssh/id_ed25519.pub"
+# Linux (X11)
+xclip -selection clipboard < "$HOME/.ssh/id_ed25519.pub"
 ```
 
 In the VM (RDP or VNC console PowerShell), paste the key into `$key` and
@@ -372,86 +469,55 @@ Restart-Service sshd
 
 Password auth also works if you'd rather skip keys for the lab.
 
-### 4f. Windows activation status (do this before SQL install)
+### 4f. Verify the edition conversion (Eval → Datacenter)
 
-The engineering golden image is **Datacenter Evaluation**. The 180-day eval
-clock started when the image was captured (build observed:
-`20348.fe_release.210507` — May 2021), not when you cloned it. The eval may
-already be expired on first boot.
+The Sysprep unattend in § 3 attempts to convert the install from
+`ServerDatacenterEval` to `ServerDatacenter` (KMS). Confirm it took.
 
-Check immediately after Sysprep finishes.
-
-> **`slmgr` over SSH (or any PowerShell session) returns no output by
-> default.** `slmgr.vbs` is a VBScript that defaults to `wscript.exe`, which
-> renders results as GUI popup dialogs — visible on the Windows desktop,
-> invisible to an SSH session. Switch the default script host to `cscript`
-> once per machine so output goes to stdout:
->
-> ```powershell
-> cscript //nologo //h:cscript //s
-> # "Command line options are saved. The default script host is now set to cscript.exe."
-> ```
->
-> After this, `slmgr /xpr` and `slmgr /dlv` work normally in any shell.
-> (Alternative: call `cscript //nologo C:\Windows\System32\slmgr.vbs /xpr`
-> explicitly each time.)
+**Required first step — do not skip:** set the default Windows Script Host
+to `cscript`. `slmgr.vbs` defaults to `wscript.exe` which renders results
+as **GUI popup dialogs** — visible to interactive users but invisible to
+PowerShell and SSH sessions. Without this, `slmgr /xpr` and `slmgr /dlv`
+return nothing on stdout and you'll think they're broken.
 
 ```powershell
-slmgr /xpr    # "permanently activated" / "in notification mode" / "initial grace period ends ..."
-slmgr /dlv    # verbose — License Status, Notification Reason, rearm count
+cscript //nologo //h:cscript //s
+# Expect: "The default script host is now set to cscript.exe."
 ```
 
-**Expired-eval signature in `slmgr /dlv`:**
-
-```
-License Status: Notification
-Notification Reason: 0xC004F009 (grace time expired).
-Remaining Windows rearm count: 5
-```
-
-`License Status: Notification` + `0xC004F009` is the smoking gun. The
-matching cluster-side symptom is the 60-minute reboot loop:
-
-```bash
-oc logs -n openshift-cnv deployment/virt-controller -f \
-  | grep "<your-vm-name>"
-```
-
-Pattern in the log: `Stopping VM with VMI in phase Succeeded` → ~35s gap →
-`Starting VM due to runStrategy: Always`, repeating every ~61 min. Windows
-is force-rebooting; KubeVirt sees the clean shutdown as `Succeeded` and
-relaunches under `runStrategy: Always`.
-
-**Remediate (if `Remaining Windows rearm count` > 0):**
+Once per machine; no reboot required. Now check the edition:
 
 ```powershell
-slmgr /rearm
-Restart-Computer
+DISM /online /Get-CurrentEdition           # expect: ServerDatacenter (NOT ServerDatacenterEval)
+slmgr /xpr                                 # expect: KMS grace or activated, NOT "Notification mode"
+slmgr /dlv | Select-String 'License Status','Partial Product Key'
 ```
 
-After reboot, `slmgr /xpr` should report `Initial grace period ends ...`
-with days remaining instead of `Notification mode`, and the 60-min reboot
-cycle stops.
+**Healthy output looks like:**
 
-> **How many days you'll get is unpredictable on this image.** The docs say
-> `/rearm` extends the eval by ~180 days, but in practice once an eval has
-> *already* gone past expiry into Notification mode, the rearm often only
-> restores the standard ~10-day activation grace — not the full 180.
-> Observed on Vince's VM (2026-05-24): rearm bumped expiry to 2026-06-03,
-> exactly 10 days. Verify with `slmgr /xpr` after reboot. **Functionally
-> it's enough — the reboot loop stops either way, and you have multiple
-> rearms left (5 total on Server 2022, one consumed per `/rearm`).** If
-> you need more time, rearm again before the next expiry.
+```
+Current Edition : ServerDatacenter
+License Status: Licensed   (or "Initial grace period ends ..." against a KMS server)
+Partial Product Key: 6VM33     (last 5 of the GVLK)
+```
 
-If rearms are exhausted, options (in rough order of pain):
+**If `Get-CurrentEdition` still shows `ServerDatacenterEval`** — the
+specialize-pass `<ProductKey>` and the FirstLogonCommands DISM fallback
+both failed to convert. Run the conversion manually:
 
-- Convert eval → retail with a real Datacenter/Standard key:
-  `dism /online /set-edition:ServerStandard /productkey:XXXXX-XXXXX-XXXXX-XXXXX-XXXXX /accepteula`
-- Point at a KMS/activation server you have access to.
-- Rebuild the engineering golden image from a fresher Windows Server 2022 ISO.
+```powershell
+DISM /online /Set-Edition:ServerDatacenter /ProductKey:WX4NM-KYWYW-QJJR4-XV3QB-6VM33 /AcceptEula
+# Reboots automatically on completion (5-15 min)
+```
 
-> Do this **before** the SQL install — otherwise the next forced reboot
-> can interrupt setup mid-flight.
+After the reboot, re-check `DISM /online /Get-CurrentEdition`. If it still
+sticks on Eval, the install is unusual — fall back to the rearm path:
+`slmgr /rearm` + `Restart-Computer` will buy 10-180 days at a time (depending
+on whether the eval has already expired), with 4 rearms remaining on a fresh
+clone of the current image.
+
+> Do the verification (and any manual conversion) **before** the SQL install —
+> a forced reboot mid-install will corrupt the SQL files.
 
 ## 5. Expose RDP and SSH from the cluster
 
@@ -491,17 +557,21 @@ spec:
     - { name: ssh, port: 22, targetPort: 22, protocol: TCP }
 ```
 
-### Verify connectivity from your Mac
+### Verify connectivity from your workstation
 
 `oc -n mssql-vss-lab get svc` shows the NodePorts assigned (e.g.
 `3389:31211/TCP`, `22:31256/TCP`). `oc get nodes -o wide` shows worker IPs.
-`nc -zv` is netcat probing TCP reachability from your Mac to the cluster:
-`-z` = zero-I/O (just probe), `-v` = verbose. Substitute any worker IP and
-the actual NodePorts:
+`nc -zv` is netcat probing TCP reachability from your workstation to the
+cluster: `-z` = zero-I/O (just probe), `-v` = verbose. Set the variables
+once, then probe + connect:
 
 ```bash
-nc -zv 172.31.1.56 31211   # RDP NodePort  -> expect "succeeded"
-nc -zv 172.31.1.56 31256   # SSH NodePort  -> expect "succeeded"
+WORKER_IP=<one-of-your-worker-IPs>
+RDP_NODEPORT=<from-oc-get-svc>
+SSH_NODEPORT=<from-oc-get-svc>
+
+nc -zv "$WORKER_IP" "$RDP_NODEPORT"   # expect "succeeded"
+nc -zv "$WORKER_IP" "$SSH_NODEPORT"   # expect "succeeded"
 ```
 
 > If `nc` says succeeded but `ssh` gets **Connection refused**, the Service
@@ -509,16 +579,32 @@ nc -zv 172.31.1.56 31256   # SSH NodePort  -> expect "succeeded"
 > `<none>`. Almost always a selector mismatch. Patch the selector:
 > `oc -n <ns> patch svc <svc> --type=merge -p '{"spec":{"selector":{"kubevirt.io/domain":null,"vm.kubevirt.io/name":"<vm-name>"}}}'`
 
-Then connect:
+Then connect.
+
+**RDP:** paste `<WORKER_IP>:<RDP_NODEPORT>` into your RDP client's "PC name"
+field. Username `Administrator`, password = the value you put in
+`<AutoLogon><Password>` / `<AdministratorPassword>` in the unattend.
+
+**SSH:** depends on which auth you set up in § 4e.
+
+If you uploaded a public key to `administrators_authorized_keys`, point at
+the matching private key on your workstation:
 
 ```bash
-# RDP — paste 172.31.1.56:31211 into Microsoft Remote Desktop's "PC name"
-# SSH
-ssh administrator@172.31.1.56 -p 31256
+SSH_KEY="$HOME/.ssh/id_ed25519"   # the key whose .pub you uploaded
+ssh -i "$SSH_KEY" -p "$SSH_NODEPORT" administrator@"$WORKER_IP"
 ```
 
-If `ocp-px` is behind a VPN or jump host, capture the path now — we'll add
-a `~/.ssh/config` `ProxyJump` entry next session.
+If you skipped the public-key step, omit `-i "$SSH_KEY"` and you'll be
+prompted for the Administrator password (same one you set in the unattend):
+
+```bash
+ssh -p "$SSH_NODEPORT" administrator@"$WORKER_IP"
+```
+
+If the cluster is behind a VPN or jump host, add a `~/.ssh/config`
+`ProxyJump` entry on your workstation so the `ssh` command above works
+end-to-end.
 
 ## 6. Install MS SQL Server (Developer Edition)
 
@@ -570,22 +656,26 @@ Free, full-feature, non-production EULA. No license key, no activation.
 
 ## 7. Done-state checklist
 
-- [ ] VM running on `ocp-px` in `mssql-vss-lab`, Windows Server 2022 (hostname
-      `mssql-lab` if you ran the rename; the Sysprep-generated `WIN-XXXXXXXX`
-      is functionally fine too).
-- [ ] `slmgr /xpr` reports healthy activation (not "expired", not "notification
-      mode") — no 60-minute reboot loop.
-- [ ] `D:` data disk formatted, empty, ready for SQL data files (CDs detached
-      or moved off `D:`/`E:`).
+- [ ] VM running on your OCPv cluster in namespace `mssql-vss-lab`, Windows
+      Server 2022 (hostname `mssql-lab` if you ran the rename in § 4c; the
+      Sysprep-generated `WIN-XXXXXXXX` is functionally fine too).
+- [ ] `DISM /online /Get-CurrentEdition` reports `ServerDatacenter` (not
+      `ServerDatacenterEval`) on healthy images. On broken-DISM images the
+      Eval grace + `slmgr /rearm` fallback in § 4f also works — see that
+      section for the trade-off.
+- [ ] `D:` data disk formatted (NTFS, label `DATA`), empty, ready for SQL
+      data files (CDs detached).
 - [ ] `Get-Service QEMU-GA` → `Running`.
-- [ ] RDP works from your Mac (port 3389 reachable, can log in as Administrator).
-- [ ] `ssh administrator@<vm-endpoint>` works from your Mac (lands in PowerShell).
+- [ ] RDP works from your workstation (port 3389 reachable, can log in as
+      Administrator).
+- [ ] `Get-Service sshd` → `Running` inside the VM (via whichever § 4e path
+      worked for your cluster), and `ssh administrator@<vm-endpoint>` works
+      from your workstation, landing in PowerShell.
 - [ ] `Get-Service SQLWriter` → `Running`.
 - [ ] `sqlcmd -S . -E -Q "SELECT @@VERSION;"` (or `-S .\<INSTANCE>` for a
       named instance) returns a Developer Edition banner.
-- [ ] Note the access path (direct? VPN? jump host?) so we can wire up
-      `~/.ssh/config` if needed.
+- [ ] Access path captured (direct? VPN? jump host?) and `~/.ssh/config`
+      `ProxyJump` entry added if needed.
 
-When all nine boxes are checked, ping me — next session configures the
-Trilio backup target, writes the Python generator (`pyodbc`), and runs the
-first backup.
+When all nine boxes are checked, the VM is ready for the BackupPlan + restore
+flow in [`docs/lab-guide.md`](lab-guide.md).
