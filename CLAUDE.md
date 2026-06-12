@@ -151,7 +151,26 @@ the Windows VM).
 ## Session State
 *(Updated at end of each session — read at start of each new session.)*
 
-### Last session: 2026-06-08 (shareable VM-build recipe shipped; new POC cluster online)
+### Last session: 2026-06-12 (prep-doc naming fix shipped; ISO golden-image build queued)
+
+**Accomplished:**
+- Diagnosed a provisioning failure on a **DRBD/LINSTOR-backed** lab cluster: the backend derives an internal volume name from namespace + VM name + disk name + `drbd-` prefix + random suffix, capped at **63 chars**. The catalog's random `adjective-animal-NN` VM/disk names overflowed it (`drbd-mssql-vss-lab-dv-win2k22-coffee-rat-79-disk-amaranth-turkey-13-a5vdrk`, ~74 chars). Confirmed it **can't be renamed in place** (k8s object names immutable; the DRBD resource name follows the PVC) — fix is recreate with short names.
+- Fixed `docs/windows-vm-prep.md` § 3: explicit short VM name (`mssql`) + disk name (`data`), length-cap callout + budget math (~34 chars for VM+disk after fixed overhead + namespace), renumbered steps, § 3a uses `VM=mssql`, fixed `§ 3.4`→`§ 3 step 5` cross-refs.
+- Wrote new `docs/golden-image-build.md` — bake-in brief for building a Win2k22 golden image from ISO.
+- Committed + pushed **`4fe7255`** on `origin/main`.
+
+**Durable lab state changes:** None — Mac-side documentation only; no cluster resources touched today.
+
+**Next session: likely week of 2026-06-15.** Vince is building the new ISO golden image offline between sessions.
+
+**Open items for next session (priority order):**
+1. **Build new Win2k22 golden image from ISO** (Vince doing offline) — follow `docs/golden-image-build.md`: licensed edition (kills the 180-day eval clock), bake virtio + QGA + OpenSSH, **delete SSH host keys before sysprep /generalize**, don't bake `authorized_keys`. On return: verify a test clone, then collapse prep-doc § 4e/§ 4f around the preinstalled services.
+2. **Recreate the failed VM with short names** (`mssql` / `data`) once the image exists. On rebuild, confirm the OCP console doesn't append a random suffix to the add-on `data` disk; if it does, switch to a YAML `dataVolumeTemplate`.
+3. **Everything in the 2026-06-08 open-items list below still applies** — POC tracks (hook + in-guest VSS requestor), the two-footprint cluster cautions (TopoLVM Trilio-operator check / `ocp-px` state verify), and the unsent internal email + Erick reply.
+
+---
+
+### Previous session: 2026-06-08 (shareable VM-build recipe shipped; new POC cluster online)
 
 **Accomplished:**
 - Resumed after an AUP-alert force-exit. Diagnosed the previous-session new-VM build failures: (a) CD-letter race blocked Order 1 data-disk init (D: held by `virtio-win` CD-ROM when `New-Partition -DriveLetter D` ran), (b) the DISM servicing stack on the golden image is broken — `Add-WindowsCapability OpenSSH.Server` returned `Installed` but binaries never deployed; `dism /Set-Edition` silently no-op'd.
@@ -180,18 +199,8 @@ the Windows VM).
 
 ---
 
-### Previous session: 2026-06-07 (lab guide published; new POC tracks scoped)
-
-**Accomplished:** `docs/lab-guide.md` shipped to public repo as `a683311` — 12-step reproducible end-to-end procedure with inline SQL + manifests + troubleshooting + sequence diagram. Audience widened to "anyone reproducing this lab"; scrubbed of internal taxonomy (Mechanism C/D/E), competitive (Veeam), and roadmap framing. Internal-only companion docs (`flow.md`, `flow-prompt-claude-design.md`) parked in `private-docs/`. `*.pdf` gitignored. Anchor-ordering correction: `COPY_ONLY .bak` lands *before* the Trilio backup (Exp 4 evidence). Pre/post workload writes promoted to `[APP-WORKLOAD]` driver marker.
-
-**New direction scoped** (carried forward as items 1-3 above): Trilio virt-launcher hook to automate `[MANUAL]` SQL steps; in-guest VSS component requestor POC (hardcoded MSSQL + SqlServerWriter, single SQL/Windows version); deferred design Q (QGA freeze/thaw alone, no guest-exec, would collapse the two tracks). POC results destined for handoff to Trilio engineering for productionized multi-DB component requestor.
-
-**Durable lab state changes:** None — Mac-side documentation work only.
-
----
-
 ### Earlier sessions
-*2026-06-03 (S3 cred-leak audit clean — no `AKIA`/`ASIA` or aws key strings in any tracked file or commit; secrets live only in `collateral/aws-s3-bucket.txt` on Vince's Mac + SQL CREDENTIAL in master), 2026-06-01 (Exp 4 PASS — full Path A end-to-end log-replay restore validated: backup `mssql-vss-backup-kcxdl` 7m31s/19.7 GiB + `COPY_ONLY .bak` anchor on D: + post-anchor `BACKUP LOG TO URL` → cross-NS restore 9m10s → in-guest `RESTORE DB WITH NORECOVERY` + `RESTORE LOG WITH RECOVERY` ~300ms → final 16 rows = 1 smoke + 10 pre-anchor + 5 post-anchor; post-anchor timestamps preserved. Email drafts staged at `private-docs/2026-06-01-*.md`, not yet sent.), 2026-05-29 (MVP-validation Exp 1-3: Full recovery already set, QGA-as-SYSTEM drives sqlcmd with SYSTEM granted sysadmin, `BACKUP LOG TO URL='s3://...'` round-trip validated — durable artifacts: SYSTEM-sysadmin on `MSSQLSERVER01`, SQL CREDENTIAL in master, AWS keys in `collateral/aws-s3-bucket.txt`), 2026-05-28 (cross-NS restore validated + QGA/VSS diagnostic — `mssql-vss-backup-2phcr` → `mssql-vss-restore`, 7m 59s, freeze/thaw IDs corrected to 3197/3198), 2026-05-25 (data disk online as D: + SQL paths relocated + backup #1 `mssql-vss-backup-2phcr` at 7m 52s / 17.85 GiB), bootstrap (2026-05-06) → VM stand-up (2026-05-07/08). Durable facts live in **Project Status**; journey is in `git log` and `output/` artifacts.*
+*2026-06-07 (lab guide `docs/lab-guide.md` shipped to public repo as `a683311` — 12-step reproducible procedure, scrubbed of internal taxonomy/competitive/roadmap framing; internal companions parked in `private-docs/`; new POC tracks scoped — Trilio virt-launcher hook + in-guest VSS component requestor + deferred QGA-freeze/thaw design Q), 2026-06-03 (S3 cred-leak audit clean — no `AKIA`/`ASIA` or aws key strings in any tracked file or commit; secrets live only in `collateral/aws-s3-bucket.txt` on Vince's Mac + SQL CREDENTIAL in master), 2026-06-01 (Exp 4 PASS — full Path A end-to-end log-replay restore validated: backup `mssql-vss-backup-kcxdl` 7m31s/19.7 GiB + `COPY_ONLY .bak` anchor on D: + post-anchor `BACKUP LOG TO URL` → cross-NS restore 9m10s → in-guest `RESTORE DB WITH NORECOVERY` + `RESTORE LOG WITH RECOVERY` ~300ms → final 16 rows = 1 smoke + 10 pre-anchor + 5 post-anchor; post-anchor timestamps preserved. Email drafts staged at `private-docs/2026-06-01-*.md`, not yet sent.), 2026-05-29 (MVP-validation Exp 1-3: Full recovery already set, QGA-as-SYSTEM drives sqlcmd with SYSTEM granted sysadmin, `BACKUP LOG TO URL='s3://...'` round-trip validated — durable artifacts: SYSTEM-sysadmin on `MSSQLSERVER01`, SQL CREDENTIAL in master, AWS keys in `collateral/aws-s3-bucket.txt`), 2026-05-28 (cross-NS restore validated + QGA/VSS diagnostic — `mssql-vss-backup-2phcr` → `mssql-vss-restore`, 7m 59s, freeze/thaw IDs corrected to 3197/3198), 2026-05-25 (data disk online as D: + SQL paths relocated + backup #1 `mssql-vss-backup-2phcr` at 7m 52s / 17.85 GiB), bootstrap (2026-05-06) → VM stand-up (2026-05-07/08). Durable facts live in **Project Status**; journey is in `git log` and `output/` artifacts.*
 
 **Persistent lab state on `ocp-px` (current as of 2026-06-01; not re-verified since — re-check before next deep work there):**
 - Context: `mssql-vss-lab/api-ocp-px-demo-presales-trilio-io:6443/kube:admin`.
