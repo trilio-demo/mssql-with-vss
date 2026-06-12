@@ -120,19 +120,50 @@ Both should be `Succeeded` / `Ready`.
 oc new-project mssql-vss-lab
 ```
 
+> ### ⚠️ Keep VM and disk names short — some storage backends derive volume names from them
+>
+> The catalog flow suggests **random `adjective-animal-NN` names** for both
+> the VM (e.g. `win2k22-coffee-rat-79`) and any blank disk you add (e.g.
+> `disk-amaranth-turkey-13`). Some CSI backends build their internal volume
+> name by concatenating the namespace + VM name + disk name, then prepend
+> their own prefix and append a random suffix — e.g. DRBD/LINSTOR produced:
+>
+> ```
+> drbd-mssql-vss-lab-dv-win2k22-coffee-rat-79-disk-amaranth-turkey-13-a5vdrk
+> ```
+>
+> That derived name has a hard length cap (**63 chars** on the backend we
+> hit), and the auto-generated names overflow it — provisioning fails with a
+> name-too-long error. (The provisioner is expected to handle long names
+> natively in a future release; until then, treat the cap as a hard
+> constraint.)
+>
+> **Fix: set short, explicit names.** This guide uses VM name **`mssql`** and
+> data-disk name **`data`**. With namespace `mssql-vss-lab` that yields a
+> derived name well under 63 chars. The fixed overhead the backend adds
+> (`drbd-` prefix, `-dv-`, `-<random>` suffix ≈ 16 chars) plus the namespace
+> leaves you ~34 chars for VM name + disk name combined — `mssql` + `data` is
+> nowhere near it. **Do not accept the random `adjective-animal-NN` names.**
+
 In the OCP Console:
 
 1. **Virtualization → Catalog → Microsoft Windows Server 2022 VM** → *Create
    VirtualMachine*.
-2. **Project / Namespace:** `mssql-vss-lab`.
-3. **CPU / Memory:** 4 vCPU, 8 GB RAM.
-4. **Disks: this step is mandatory — don't skip.** Keep the default boot
+2. **VirtualMachine name:** overwrite the suggested random name with a short
+   explicit one — **`mssql`** (see the length-cap callout above). This name
+   propagates into the boot-disk and any add-on-disk volume names, so keeping
+   it short here is what keeps the backend's derived name under 63 chars.
+3. **Project / Namespace:** `mssql-vss-lab`.
+4. **CPU / Memory:** 4 vCPU, 8 GB RAM.
+5. **Disks: this step is mandatory — don't skip.** Keep the default boot
    disk, then **Add disk** (the form section is at the bottom of the page;
    easy to miss):
-   - Name: `data`
+   - Name: **`data`** — type this explicitly; **don't leave the
+     auto-suggested `disk-<adjective-animal-NN>`**, or the derived volume
+     name overflows the 63-char cap (this is the field that bit us).
    - Source: Blank
    - Size: **40 GiB**
-   - StorageClass: leave as default (picks up `px-csi-replicated`).
+   - StorageClass: leave as default (picks up the cluster's default virt class).
    - Type: Disk (block / virtio).
 
    > If you forgot this and the VM is already created, you can add it
@@ -142,9 +173,9 @@ In the OCP Console:
    > FirstLogonCommand only runs on first boot — if the disk wasn't present
    > then, you'll need to format it manually post-attach (the one-liner is
    > in § 4b's "No `D:` volume?" callout).
-5. Click **Customize VirtualMachine**.
-6. **Scripts** tab → **Sysprep** → paste the unattend XML below.
-7. **Untick "Start this VirtualMachine after creation"** so you can adjust
+6. Click **Customize VirtualMachine**.
+7. **Scripts** tab → **Sysprep** → paste the unattend XML below.
+8. **Untick "Start this VirtualMachine after creation"** so you can adjust
    firmware before first boot (next step). Then click **Create VirtualMachine**.
 
 ### 3a. Disable Secure Boot before first boot
@@ -155,8 +186,12 @@ OVMF's secboot variant trusts — Secure Boot rejects it and the VM parks at
 the TianoCore splash. Patch it off before starting.
 
 ```bash
-# Catalog templates generate a random VM name; grab it
-VM=$(oc -n mssql-vss-lab get vm -o jsonpath='{.items[0].metadata.name}')
+# The explicit name you set in § 3 step 2. (If you let the catalog generate
+# one anyway, grab it with:
+#   VM=$(oc -n mssql-vss-lab get vm -o jsonpath='{.items[0].metadata.name}')
+# — but a long generated name may have already failed provisioning. See the
+# length-cap callout in § 3.)
+VM=mssql
 
 # Disable Secure Boot + SMM (KubeVirt couples them — must toggle together)
 oc -n mssql-vss-lab patch vm "$VM" --type=merge -p '{
@@ -243,9 +278,9 @@ Get-Volume -DriveLetter D
 ```
 
 Expect `FileSystem: NTFS`, `FileSystemLabel: DATA`, `DriveType: Fixed`,
-free space ≈ the size you specified in § 3.4.
+free space ≈ the size you specified in § 3 step 5.
 
-> **No `D:` volume?** Two likely causes: (a) step 3.4 was skipped and there
+> **No `D:` volume?** Two likely causes: (a) § 3 step 5 was skipped and there
 > is no blank data disk to initialize — `Get-Disk | Where-Object
 > PartitionStyle -in 'RAW','Uninitialized'` will return nothing; attach
 > a 40 GiB blank disk and re-run the FirstLogonCommand manually:
@@ -528,8 +563,8 @@ selector (`vm.kubevirt.io/name: <vm-name>`) automatically.
 
 If you'd rather apply YAML — note the selector key. The catalog-template
 VM's launcher pod has `kubevirt.io/domain` set to the **VM resource name**
-(e.g. `win2k22-aqua-junglefowl-90`), *not* the Windows hostname. Use
-`vm.kubevirt.io/name` to be unambiguous:
+(`mssql`, from § 3 step 2), *not* the Windows hostname (`mssql-lab`, from
+§ 4c). Use `vm.kubevirt.io/name` to be unambiguous:
 
 ```yaml
 apiVersion: v1
@@ -626,7 +661,7 @@ Free, full-feature, non-production EULA. No license key, no activation.
    - **Data directories:** point everything at `D:\` —
      `D:\MSSQL\Data`, `D:\MSSQL\Log`, `D:\MSSQL\Backup`. Keeps the FLR story
      clean (SQL files live on the data disk, not `C:`). **If `D:` doesn't
-     exist yet**, go back to § 3.4 / § 4b — the SQL data dirs on `C:` muddy
+     exist yet**, go back to § 3 step 5 / § 4b — the SQL data dirs on `C:` muddy
      the per-volume snapshot story.
 3. Install **SSMS** (Management Studio) separately — also free, link on the
    same page (there's also an "Install SSMS" shortcut button on the SQL
