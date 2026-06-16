@@ -254,6 +254,32 @@
 
         <!--
         ============================================================
+        Order 4 — Activate the evaluation over the internet
+        ============================================================
+        THIS is what gives each clone its full ~180-day evaluation.
+        A freshly generalized eval clone boots into "Initial grace
+        period" with only ~10 days remaining — that 10 days is the
+        "activate within 10 days or auto-shutdown" deadline, NOT the
+        eval length. `slmgr /ato` performs the online activation, which
+        flips the clock to the full ~180-day timed-eval window
+        (verified 2026-06-16: 10 days -> expiry +180 days). sysprep
+        /generalize resets activation, so this MUST run per clone on
+        first boot — it cannot be baked into the shared golden image.
+
+        Requires outbound reachability to Microsoft activation. If a
+        cluster blocks it, this is a harmless no-op and the clone keeps
+        the 10-day grace (re-run `slmgr /ato` once egress is available).
+        ============================================================
+        -->
+        <SynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <CommandLine>cscript //nologo C:\Windows\System32\slmgr.vbs /ato</CommandLine>
+          <Description>Activate the evaluation online to unlock the full ~180-day eval window</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <!--
+        ============================================================
         OpenSSH Server install is intentionally NOT done here.
         ============================================================
         An earlier revision had Orders 4-6 download OpenSSH-Win64.zip
