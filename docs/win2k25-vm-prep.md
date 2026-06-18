@@ -231,6 +231,12 @@ Get-NetIPInterface -InterfaceAlias Ethernet -AddressFamily IPv4 | Select NlMtu  
 Then `slmgr /ato` succeeds and `slmgr /xpr` shows ~180 days. (This also fixes
 any other large-payload egress from the guest — big downloads, etc.)
 
+> The same black-hole hits any large HTTPS transfer, not just activation —
+> e.g. a GitHub OpenSSH-zip download. A/B verified on this cluster
+> (2026-06-18): same URL/path, guest MTU **1500 → stalls, times out at 45 s**;
+> **1400 → 4.6 MB in 1.4 s**. So a download that "hangs" while small requests
+> to the same host succeed is the MTU signature, not an egress block.
+
 > Diagnostic that distinguishes MTU from a real egress block: from a pod,
 > `curl https://activation.sls.microsoft.com/` returning a genuine Microsoft
 > cert + an HTTP status (e.g. 403) means egress is fine and the guest-side

@@ -244,13 +244,18 @@ to the Windows logon screen instead of straight to the desktop.
 
 **OpenSSH Server is NOT installed by the unattend.** Earlier revisions of
 this file had Orders 4-6 download `OpenSSH-Win64.zip` from GitHub. That
-approach broke in two ways on restricted-egress clusters: (a) clusters
-commonly allow `api.github.com` but block the release download CDN
-(`objects.githubusercontent.com`), and (b) on the test image, the
-`FirstLogonCommands` chain halted between Order 3 and Order 4 with no
-diagnostic surface, leaving Orders 4-6 unfired even when the download URL
-was reachable. SSH install is now a post-boot step with three install paths
-(§ 4e); choose whichever matches your cluster's egress posture.
+approach broke in two ways: (a) the download to the release CDN
+(`objects.githubusercontent.com`) stalled and timed out — *originally
+diagnosed as a CDN egress block, but isolated to the **NIC MTU** by an A/B
+test on 2026-06-18: at the guest's default 1500 MTU the transfer
+black-holes on a 1400 OVN overlay; at 1400 the same download completes
+(4.6 MB in 1.4 s). `api.github.com` "worked" throughout because its small
+requests fit; only the large CDN transfer was affected. See § 4e Path B.*
+And (b) on the test image, the `FirstLogonCommands` chain halted between
+Order 3 and Order 4 with no diagnostic surface, leaving Orders 4-6 unfired —
+a separate, still-unexplained failure not attributable to MTU. SSH install
+is now a post-boot step with three install paths (§ 4e); choose whichever
+matches your cluster's egress posture.
 
 ## 4. First-boot post-config
 
@@ -374,13 +379,19 @@ Rename-Item 'C:\Program Files\OpenSSH-Win64' 'C:\Program Files\OpenSSH'
 powershell.exe -ExecutionPolicy Bypass -File 'C:\Program Files\OpenSSH\install-sshd.ps1'
 ```
 
-> **If `Invoke-WebRequest` hangs**, you've probably hit the
-> `api.github.com`-allowed-but-CDN-blocked egress pattern. Confirm with:
-> ```powershell
-> Test-NetConnection api.github.com -Port 443 -InformationLevel Quiet
-> Test-NetConnection objects.githubusercontent.com -Port 443 -InformationLevel Quiet
-> ```
-> If the second returns False, drop to Path C.
+> **Set the NIC MTU first.** This is a large transfer, so on a 1400-overlay
+> cluster it black-holes at the guest's default 1500 MTU — the request
+> *starts* then stalls to the timeout. Run § 4a's MTU fix
+> (`netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent`)
+> **before** the download. (Verified 2026-06-18: 1500 → stall/timeout;
+> 1400 → 4.6 MB in 1.4 s, same URL/path.)
+>
+> **If it still hangs after the MTU fix**, you may have a genuine CDN egress
+> block. Note `Test-NetConnection objects.githubusercontent.com -Port 443`
+> is **not** a reliable check — TCP/443 connects fine (small packets) under
+> both an MTU black-hole *and* a working path, so it returns `True` either
+> way. The real test is whether the **download** completes after MTU=1400.
+> If it doesn't, drop to Path C.
 
 Then run the [common service registration block](#common-service-registration)
 below.

@@ -15,6 +15,18 @@ Start-Process msiexec -Wait -ArgumentList "/i E:\virtio-win-gt-x64.msi /qn /pass
 # --- QEMU Guest Agent (LOAD-BEARING for the VSS lab; Trilio drives VSS via it) -
 Start-Process msiexec -Wait -ArgumentList "/i E:\guest-agent\qemu-ga-x86_64.msi /qn /passive /norestart"
 
+# --- NIC MTU insurance BEFORE any download (build robustness) ------------
+# Windows ignores the DHCP MTU option and stays at 1500. On a cluster whose
+# overlay MTU is smaller (OVN-Kubernetes = 1400), full-size 1500-byte frames
+# from a large HTTPS transfer are black-holed -- the TLS handshake + small
+# requests succeed (so the host "looks reachable") but the zip download stalls
+# and times out. This is exactly what masqueraded as an "egress block" on
+# objects.githubusercontent.com; isolated to MTU by an A/B test 2026-06-18
+# (1400 -> 4.6 MB in 1.4 s; 1500 -> stall/timeout, same URL/path). 1400 is
+# <= any standard path, so it is always safe here. (generalize resets this on
+# the clone; clone-side MTU is handled separately by unattend.xml Order 4.)
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
+
 # --- OpenSSH Server via GitHub zip (Windows Update FOD is unreachable from
 #     this bake cluster; github.com + release CDN ARE reachable -- verified
 #     2026-06-15. Bake-time egress is this cluster's; once baked, clones need

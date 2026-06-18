@@ -1,184 +1,212 @@
-# Golden Image Build — Bake-In Brief
+# Golden Image Build — Windows Server 2025
 
-A focused checklist for building a **Windows Server 2022** golden image from
-ISO so it drops cleanly into the lab's VM-prep flow. The point of building our
-own image (vs. the stock engineering golden image) is to:
+How to build the lab's **Windows Server 2025** golden image from an ISO using
+the Red Hat **`windows-efi-installer`** Tekton pipeline, so it drops cleanly
+into the VM-prep flow. The point of building our own image (vs. the stock
+engineering golden image) is to produce **self-sufficient clones**:
 
-1. **Kill the 180-day evaluation clock** — install from a real ISO with a
-   proper edition/key so there's no eval expiry → no KubeVirt restart loop →
-   no `slmgr /rearm` dance (retires § 4f of `windows-vm-prep.md`).
-2. **Bake in the services** so per-VM prep shrinks: QGA, virtio drivers, and
-   OpenSSH Server all preinstalled (collapses § 4e's three SSH install paths).
+1. **virtio + QGA + OpenSSH baked in** — per-VM prep shrinks to "upload your
+   key." QGA is load-bearing for the VSS lab (Trilio drives Windows VSS
+   freeze/thaw through it); SSH is convenience.
+2. **No reliance on a healthy in-image servicing stack or Microsoft Update
+   egress at clone time** — everything that needs the network is done **once**,
+   at bake time.
 
-This brief assumes you already have a working **image-capture pipeline**
-(boot ISO → install → customize → `sysprep /generalize` → capture disk). It
-documents *what to add to that process* and the *capture-time gotchas* — not
-how to stand up the pipeline itself.
+> Pairs with [`win2k25-vm-prep.md`](win2k25-vm-prep.md), which consumes the
+> resulting image. This brief is the *build* side; that doc is the *clone* side.
 
-> Pairs with [`windows-vm-prep.md`](windows-vm-prep.md). When this image is
-> live and verified, § 4e collapses to "sshd preinstalled — just upload your
-> key" and § 4f (eval/rearm) disappears.
+**Source-of-truth files (edit these, then rebuild — see the procedure):**
 
----
-
-## What this image must contain (the bake list)
-
-Do all of this in the capture VM **before** the final sysprep, in roughly this
-order. Each block is idempotent enough to re-run if your pipeline replays.
-
-### 1. Edition / activation — solves the eval clock
-
-Install from the ISO as a **licensed (non-eval) edition**, or convert during
-build:
-
-```powershell
-# Confirm what you booted
-DISM /online /Get-CurrentEdition          # want: ServerStandard / ServerDatacenter, NOT *Eval
-
-# If the ISO gave you an Eval edition, convert (GVLK shown = Datacenter KMS):
-DISM /online /Set-Edition:ServerDatacenter /ProductKey:WX4NM-KYWYW-QJJR4-XV3QB-6VM33 /AcceptEula
-# Reboots automatically; re-check Get-CurrentEdition after.
-```
-
-> On a **fresh-from-ISO** install the DISM servicing stack is healthy, so this
-> conversion actually works — unlike the old engineering golden image where
-> DISM was broken and edition conversion silently no-op'd. That broken-DISM
-> behavior is the whole reason we're rebuilding from ISO.
-
-If you have a KMS host or MAK key for the lab, activate against it now so
-clones come up Licensed.
-
-### 2. virtio-win drivers — required for KubeVirt
-
-The VM won't see its disk/NIC correctly on OCPv without these. Mount the
-`virtio-win` ISO and install the full driver set + the guest tools:
-
-```powershell
-# E: = mounted virtio-win ISO
-pnputil /add-driver E:\*.inf /subdirs /install        # all virtio drivers
-# or run the virtio-win guest-tools MSI for drivers + tray apps
-Start-Process msiexec -Wait -ArgumentList '/i E:\virtio-win-gt-x64.msi /qn /norestart'
-```
-
-### 3. QEMU Guest Agent (QGA) — load-bearing for the whole VSS lab
-
-**Do not skip or forget this.** QGA is what Trilio signals to drive Windows
-VSS freeze/thaw. No QGA → no application-consistent backup → the lab's entire
-premise fails. SSH is a convenience; QGA is the point.
-
-```powershell
-# From the virtio-win ISO guest-agent folder:
-Start-Process msiexec -Wait -ArgumentList '/i E:\guest-agent\qemu-ga-x86_64.msi /qn /norestart'
-Get-Service QEMU-GA      # expect Running / Automatic after install
-```
-
-### 4. OpenSSH Server — preinstall so per-VM prep is one step
-
-On a healthy fresh ISO build, the capability install works (the
-"capability-lies / binary-never-lands" failure was an artifact of the broken
-golden image, not OpenSSH):
-
-```powershell
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-Test-Path 'C:\Windows\System32\OpenSSH\sshd.exe'      # MUST be True
-
-# Register the service and set it to start automatically on every clone
-powershell.exe -ExecutionPolicy Bypass -File 'C:\Windows\System32\OpenSSH\install-sshd.ps1'
-Set-Service -Name sshd -StartupType Automatic
-
-# Inbound TCP/22 firewall rule
-New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
-  -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
-
-# Make PowerShell the default SSH shell (so sessions land in PS, not cmd)
-New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell `
-  -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
-  -PropertyType String -Force
-```
-
-> **Do NOT `Start-Service sshd` during the build** (or if you do, see the
-> host-key cleanup in the capture gotchas below). Set it Automatic and let it
-> first-start on each clone — that's what gives every clone unique host keys.
+| File | Role |
+|---|---|
+| [`win2k25-golden-autounattend.xml`](win2k25-golden-autounattend.xml) | Build answer file — windowsPE install → audit mode → `sysprep /generalize` → shutdown/capture. |
+| [`win2k25-golden-post-install.ps1`](win2k25-golden-post-install.ps1) | Runs once in **audit mode**: virtio + QGA + OpenSSH + firewall + host-key wipe. |
+| [`win2k25-golden-dataimportcron.yaml`](win2k25-golden-dataimportcron.yaml) | Downstream — publishes the distributed containerDisk as a catalog boot source. |
 
 ---
 
-## Capture-time gotchas (read before sysprep)
+## ⚠️ The eval clock is solved by **activation**, not by a licensed ISO
 
-These are the things that bite a generalized image. Handle them in the window
-between "bake list done" and "`sysprep /generalize`".
+This is the single most important correction over earlier (2022) thinking.
 
-### Delete SSH host keys before generalize
+A freshly generalized **evaluation** clone boots into an "Initial grace period"
+that is the **activate-within-10-days** deadline — *not* a 10-day eval. Running
+**`slmgr /ato`** (online activation) flips it to the full **~180-day** timed
+eval. **No licensed/VL ISO and no product key are required**, and you must
+**not** try to convert the edition inline (see build-breakers below).
 
-If sshd ever started during the build, it generated host keys at
-`C:\ProgramData\ssh\ssh_host_*`. Captured into the image, **every clone would
-share the same host keys** — a security smell and a source of SSH
-host-key-mismatch warnings on your workstation. Remove them; sshd regenerates
-unique keys on each clone's first boot:
+- **Build side:** leave the image **generalized and unactivated**. Do nothing
+  about licensing here.
+- **Clone side:** [`unattend.xml`](unattend.xml) Order 4 runs `slmgr /ato` on
+  first boot (after the MTU fix, which the activation HTTPS call depends on).
+  Each clone self-activates to ~180 days. See `win2k25-vm-prep.md` § 4.
 
-```powershell
-Stop-Service sshd -ErrorAction SilentlyContinue
-Remove-Item 'C:\ProgramData\ssh\ssh_host_*' -Force -ErrorAction SilentlyContinue
+The old `golden-image-build.md` premise — "install a licensed edition to kill
+the eval clock" — was **wrong** and led to the `dism /Set-Edition` build-hang.
+Do not reintroduce it.
+
+---
+
+## What the two answer files do
+
+The PowerShell is in the repo files above; this is the *why* so you can review
+a change before rebaking. Don't duplicate the scripts into procedure runbooks —
+edit the files and rebuild.
+
+### `win2k25-golden-autounattend.xml` (build answer file)
+- **windowsPE**: wipes disk 0, lays EFI/MSR/Primary, injects the virtio
+  `viostor` + `NetKVM` drivers from the mounted virtio ISO (`E:\…\2k25\amd64`),
+  and selects the edition via **`/IMAGE/INDEX = 2`** (Standard, Desktop
+  Experience). Empty `<ProductKey>` — eval, activated later by the clone.
+- **oobeSystem** reseals into **Audit** mode.
+- **auditUser** runs `F:\post-install.ps1` once, then **generalizes with
+  `ForceShutdownNow`** — that shutdown is what the pipeline captures as the
+  golden disk.
+
+### `win2k25-golden-post-install.ps1` (audit-mode customize)
+Everything here lands in the image:
+- **virtio-win guest drivers** (KubeVirt disk/NIC) + **QEMU Guest Agent**.
+- **NIC MTU → 1400 before any download** (build-robustness insurance — Windows
+  ignores DHCP MTU and stalls large HTTPS transfers on a 1400 overlay; see
+  win2k25-vm-prep.md § 4a). Generalize resets it, so clone-side MTU stays
+  `unattend.xml` Order 4's job.
+- **OpenSSH Server via the GitHub release zip** (Microsoft's official binaries,
+  different channel than the Windows-Update FOD — see build-breakers), service
+  `Automatic`, **firewall rule on `-Profile Any`** (the masquerade net is
+  classified `Public`; a Private-only rule silently drops inbound SSH),
+  PowerShell as `DefaultShell`.
+- **Host-key wipe** before generalize so every clone gets unique SSH host keys.
+  Does **not** bake `authorized_keys` (key upload stays per-clone).
+
+---
+
+## Build procedure (configmap + pipeline)
+
+Run on a cluster with the **OpenShift Pipelines** operator and the
+**`redhat-pipelines`** Tekton Hub catalog enabled. Pick a build namespace:
+
+```bash
+NS=win-golden-build
 ```
 
-### Do NOT bake `authorized_keys` into the image
+### 1. Build the answer-file ConfigMap
 
-If this image is shared, a baked-in `administrators_authorized_keys` means one
-private key unlocks every clone. Leave key upload as a **per-clone post step**
-(it stays in `windows-vm-prep.md` § 4e key-auth block). Password auth set via
-the unattend works clone-wide and is fine for the lab.
+The pipeline mounts this ConfigMap as the sysprep CD (drive `F:`). It needs
+**both** keys — `autounattend.xml` and `post-install.ps1` — keyed exactly so
+(`F:\post-install.ps1` is hard-referenced from the answer file). Recreate it
+straight from the repo files so the image always matches what's committed:
 
-### Protect the rearm count
-
-In your generalize-pass unattend, keep `<SkipRearm>1</SkipRearm>` so a future
-sysprep re-run doesn't burn the limited eval-rearm count. (Moot once you're on
-a properly licensed edition per step 1, but harmless and matches the prep
-doc's unattend.)
-
-### Sysprep generalize + OOBE + shutdown
-
-Standard capture invocation:
-
-```powershell
-C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /unattend:C:\path\to\unattend.xml
+```bash
+oc create configmap windows2k25-autounattend-golden \
+  --from-file=autounattend.xml=docs/win2k25-golden-autounattend.xml \
+  --from-file=post-install.ps1=docs/win2k25-golden-post-install.ps1 \
+  -n "$NS" --dry-run=client -o yaml | oc apply -f -
 ```
 
-The per-VM unattend in [`unattend.xml`](unattend.xml) handles the
-*specialize/oobeSystem* passes at clone time (auto-logon, RDP enable, data-disk
-init). Your **build-time** generalize unattend is separate and only needs the
-`generalize` pass + `<SkipRearm>`.
+> Re-run this after **any** edit to either source file, then re-run the
+> pipeline. (Editing the file on your Mac alone changes nothing — the pipeline
+> reads the ConfigMap, not your working tree.)
+
+### 2. Run the `windows-efi-installer` pipeline
+
+Easiest from the console: **Pipelines → Pipelines → Create → from the
+`redhat-pipelines` catalog → `windows-efi-installer`** (lab used **v4.21.0**,
+resolved via the hub resolver; bump the PipelineRun timeout to ~**2h**). The
+PipelineRun form prompts for parameters; the ones that matter (names may vary
+slightly by pipeline version — map by function):
+
+| Parameter (function) | Value |
+|---|---|
+| Autounattend ConfigMap name | **`windows2k25-autounattend-golden`** (from step 1) |
+| Windows ISO download URL | a **current Server 2025 eval ISO** URL |
+| virtio container-disk image | the cluster's virtio-win containerDisk |
+| Output base DataVolume name | **`win2k25`** |
+| Preference / instance type | Windows 2025 / a sane default (e.g. `u1.large`) |
+| Target DV size / StorageClass | ≥ 21 Gi on a working SC (Block/RWX ideal) |
+
+The pipeline boots the ISO into an installer VM, runs the answer file +
+post-install, generalizes, shuts down, and captures the result into the
+`win2k25` DataVolume.
+
+### 3. Monitor — and the two hangs you will hit
+
+- **`wait-for-vmi-status` task hangs** after the build VM should have powered
+  off (VMI finalizers don't release). Clear it by force-deleting the launcher
+  pod:
+  ```bash
+  oc delete pod -l vm.kubevirt.io/name=<build-vm-name> -n "$NS" --grace-period=0 --force
+  ```
+- **Image-picker hang in windowsPE** (Setup sits on the edition-select screen).
+  Microsoft refreshes the eval ISO periodically and the image *Description*
+  strings drift — which is exactly why the answer file selects by
+  **`/IMAGE/INDEX`** (index 2 = Standard Desktop Experience), not by
+  `/Image/Description`. Catch a stuck install fast with a screenshot instead of
+  waiting out the timeout:
+  ```bash
+  virtctl vnc screenshot <build-vm-name> -n "$NS" --output=/tmp/build.png
+  ```
+  If a future ISO reorders indexes, confirm with
+  `dism /Get-ImageInfo /ImageFile:<install.wim>` and adjust `/IMAGE/INDEX`.
+
+### 4. Output
+
+A generalized, **unactivated** `win2k25` DataVolume — the golden master. Verify
+it on a test clone (below), then distribute it.
+
+---
+
+## Build-breakers learned the hard way (do NOT reintroduce)
+
+| Anti-pattern | What happens | Do instead |
+|---|---|---|
+| `dism /Set-Edition` (inline edition conversion) before sysprep | Set-Edition stages a pending-reboot; `sysprep /generalize` refuses (`hr=0x8007139f`); the VM never powers off → `wait-for-vmi-status` hangs forever | **No edition conversion.** Boot the eval ISO, pick the edition via `/IMAGE/INDEX`, activate per-clone with `slmgr /ato`. |
+| OpenSSH via `Add-WindowsCapability` (Windows-Update FOD) | FOD endpoint (`fe2.update.microsoft.com`) is commonly blocked; on the old golden image DISM also lied (`Installed`, no binaries) | **GitHub release zip** — `github.com` + its CDN are reachable from the bake cluster; no FOD, no DISM-stack dependency, version-pinnable. |
+| Treating the 10-day clock as the eval length | Wasted effort chasing licensed ISOs / `slmgr /rearm` | It's the **activate-by** deadline; `slmgr /ato` unlocks ~180 days. |
+| Starting sshd during the build without wiping host keys | Every clone ships identical SSH host keys | Set sshd `Automatic` but don't start it; **wipe `C:\ProgramData\ssh\ssh_host_*`** before generalize. |
+| Large download before setting MTU | Stalls/timeouts that look like an egress block | Set NIC **MTU 1400 first** (already first in `post-install.ps1`). |
 
 ---
 
 ## Post-build verification (on a test clone, before blessing the image)
 
-Provision one VM from the new image via `windows-vm-prep.md` and confirm:
+Provision one VM from `win2k25` via `win2k25-vm-prep.md` and confirm:
 
 ```powershell
-DISM /online /Get-CurrentEdition          # ServerStandard/Datacenter, NOT *Eval
-slmgr /xpr                                 # Licensed (or KMS grace), NOT Notification mode
-Get-Service QEMU-GA                        # Running / Automatic
-Get-Service sshd                           # Running / Automatic
-Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP'   # Enabled
+Get-ComputerInfo | Select WindowsProductName, OsHardwareAbstractionLayer  # 2025, Desktop
+Get-Service QEMU-GA      # Running / Automatic
+Get-Service sshd         # Running / Automatic
+slmgr /xpr               # after Order-4 /ato: ~180 days, NOT Notification mode
+Get-NetFirewallRule -DisplayName 'OpenSSH*' | Select DisplayName, Profile, Enabled  # Profile = Any
 ```
 
-Also confirm from your workstation that **each** clone presents a *different*
-SSH host key (i.e. host keys are not shared) — connect to two clones and check
-they don't collide in `known_hosts`.
+Also confirm two clones present **different** SSH host keys (no `known_hosts`
+collision) — proves the host-key wipe worked.
 
 ---
 
-## What this retires in `windows-vm-prep.md`
+## After the image is built — distribute it
 
-Once this image is live and the test clone passes:
+The golden DV lives on the build cluster. To make it consumable everywhere,
+package it as an OCI **containerDisk** (disk at `/disk/`), push to a registry
+all clusters reach (lab uses `ghcr.io/trilio-demo/win2k25-golden:<date-tag>`),
+and consume via a `registry:` DataVolume or the
+[`win2k25-golden-dataimportcron.yaml`](win2k25-golden-dataimportcron.yaml)
+catalog boot source. Build the containerDisk **in-cluster** (a buildah Job) —
+the Mac `virtctl vmexport download` is unreliable on multi-GB pulls. Full
+consume-side setup (GHCR secrets, the two-namespace pull-secret gotcha) is in
+`win2k25-vm-prep.md` § 1–2.
 
-- **§ 4e (Install OpenSSH Server)** → shrinks to: "sshd is preinstalled and
-  Automatic; upload your public key (key-auth block) if you want key login."
-  The three install paths (capability / GitHub zip / RDP drag-and-drop) go
-  away.
-- **§ 4f (Verify edition conversion / rearm)** → removed entirely; the image
-  is licensed, no eval clock, no restart loop.
-- **§ 4a (Verify QGA)** stays — still worth a one-line confirmation, but it
-  should always pass now.
+---
 
-Hold those prep-doc edits until this image exists and the test clone is
-verified. Don't edit the doc against an image that isn't built yet.
+## What this retires in `win2k25-vm-prep.md`
+
+Once a rebaked image is built **and** distributed, and a test clone passes:
+
+- **§ 5c (firewall `-Profile Any`)** → becomes baked; drop it as a per-clone
+  step. *(The currently-distributed `:2026-06-16` containerDisk predates the
+  firewall fix, so § 5c is still required until the next rebake+push.)*
+- **§ 5 SSH install** is already "baked — just upload your key"; nothing to
+  change there.
+- **§ 4 (MTU + activation)** stays — clone-side, still required.
+
+Hold prep-doc edits until the rebaked image is live and verified.
