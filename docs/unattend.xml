@@ -98,20 +98,20 @@
   -->
   <settings pass="specialize">
     <!--
-      Server 2022 Datacenter GVLK (public Microsoft KMS Client Setup Key).
-      NOT a license — it tells Sysprep which target edition to convert the
-      Eval install into. On a healthy install the edition flips from
-      ServerDatacenterEval to ServerDatacenter here. On a DISM-broken
-      install this is a no-op; Order 2 below tries again, also best-effort.
-      Reference:
-      learn.microsoft.com/windows-server/get-started/kms-client-activation-keys
+      NO <ProductKey> here — deliberately. Evaluation images (2022 or 2025,
+      Standard or Datacenter) self-assign the TIMEBASED_EVAL channel and are
+      activated online at first boot by FirstLogonCommands Order 4
+      (`slmgr /ato`), which unlocks the full ~180-day eval. No key is needed.
+
+      A hardcoded edition GVLK here is not just unnecessary, it is HARMFUL
+      across versions: the WS2022 Datacenter GVLK applied to a Server 2025
+      Standard image makes Windows reject the whole specialize pass with
+        "Windows could not parse or process the unattend answer file for pass
+         [specialize] ... component [Microsoft-Windows-Shell-Setup]"
+      and setup falls into the "computer restarted unexpectedly" loop
+      (observed 2026-06-17 bringing the 2025 golden image up on a new cluster).
+      Keep this answer file edition/version-agnostic.
     -->
-    <component name="Microsoft-Windows-Shell-Setup"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral" versionScope="nonSxS">
-      <ProductKey>WX4NM-KYWYW-QJJR4-XV3QB-6VM33</ProductKey>
-    </component>
 
     <!--
       Extend the OS partition (C:) to consume all unallocated space on
@@ -254,7 +254,33 @@
 
         <!--
         ============================================================
-        Order 4 — Activate the evaluation over the internet
+        Order 4 — Fix the NIC MTU to match the cluster overlay
+        ============================================================
+        MUST run before activation (Order 5). KubeVirt/OVN advertises a
+        reduced MTU (commonly 1400) via DHCP, but Windows IGNORES the
+        DHCP MTU option and stays at 1500. The guest then emits 1500-byte
+        packets into a 1400 overlay; small packets (TCP handshake, SSH)
+        pass, but large ones (TLS handshakes, the activation exchange,
+        big downloads) are dropped and PMTU discovery is black-holed —
+        so HTTPS just times out (slmgr /ato -> 0x80072EE2). Setting the
+        guest MTU to the overlay size fixes it (verified 2026-06-17:
+        1500 -> 1400 made activation succeed instantly).
+
+        1400 matches the standard OVN-Kubernetes pod MTU. If your cluster
+        differs, set this to the launcher pod's eth0 MTU
+        (`oc exec <virt-launcher-pod> -c compute -- cat /sys/class/net/eth0/mtu`).
+        ============================================================
+        -->
+        <SynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <CommandLine>netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent</CommandLine>
+          <Description>Lower NIC MTU to 1400 to match the OVN overlay (Windows ignores DHCP MTU)</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <!--
+        ============================================================
+        Order 5 — Activate the evaluation over the internet
         ============================================================
         THIS is what gives each clone its full ~180-day evaluation.
         A freshly generalized eval clone boots into "Initial grace
@@ -262,17 +288,19 @@
         "activate within 10 days or auto-shutdown" deadline, NOT the
         eval length. `slmgr /ato` performs the online activation, which
         flips the clock to the full ~180-day timed-eval window
-        (verified 2026-06-16: 10 days -> expiry +180 days). sysprep
+        (verified 2026-06-17: 10 days -> expiry 12/14/2026). sysprep
         /generalize resets activation, so this MUST run per clone on
         first boot — it cannot be baked into the shared golden image.
 
-        Requires outbound reachability to Microsoft activation. If a
-        cluster blocks it, this is a harmless no-op and the clone keeps
-        the 10-day grace (re-run `slmgr /ato` once egress is available).
+        Depends on Order 4 (MTU): without it, the activation HTTPS call
+        times out (0x80072EE2). Also requires the cluster to allow
+        outbound 443 to *.sls.microsoft.com (un-intercepted). Where that
+        is unavailable it is a harmless no-op and the clone keeps the
+        10-day grace; re-run `slmgr /ato` once reachable.
         ============================================================
         -->
         <SynchronousCommand wcm:action="add">
-          <Order>4</Order>
+          <Order>5</Order>
           <CommandLine>cscript //nologo C:\Windows\System32\slmgr.vbs /ato</CommandLine>
           <Description>Activate the evaluation online to unlock the full ~180-day eval window</Description>
           <RequiresUserInput>false</RequiresUserInput>
