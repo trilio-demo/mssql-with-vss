@@ -185,7 +185,8 @@ golden-image infra all day.
   boot source `win2k25-trilio-golden` (DataImportCron) imports the registry image.
   *(Cron still points at the OLD tag until the bumped manifest is applied here.)*
 - **Build cluster (Ceph RBD)** — golden-image BUILD cluster. **`win2k25-v1` DV =
-  the NEW validated golden** (inbox SSH); `win2k25` = old fallback. Registry tag
+  the sole golden** (inbox SSH, validated; old `win2k25` DV deleted — the
+  `:2026-06-16` ghcr tag is the only remaining fallback). Registry tag
   `:2026-06-18` pushed. Pipeline `windows-efi-installer` v4.21.0 in the build ns.
 
 **Open items (priority order):**
