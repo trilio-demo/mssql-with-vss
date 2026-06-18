@@ -42,6 +42,9 @@ Thumbs.db
 collateral/
 output/
 private-docs/
+# Atlas positioning overview — holds internal context (competitive, customer,
+# roadmap) by design; feeds Vince's Atlas/Cockpit tooling, not the public repo
+.atlas/
 
 # Local-only files — backlog, scratch pads, meta notes — never commit
 TODO.md
