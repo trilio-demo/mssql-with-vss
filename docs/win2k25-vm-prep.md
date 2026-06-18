@@ -21,27 +21,52 @@ SC_WFFC=<wffc-storageclass>         # a WaitForFirstConsumer SC (see § 2 note)
 
 ---
 
-## 1. Pull credentials for the golden image (required — private package)
+## 1. GitHub PATs + GHCR secrets (required — private package)
 
-The golden image is a **private** ghcr package, so every cluster that pulls it
-needs a CDI-format pull secret. You need a **GitHub classic PAT with
-`read:packages`** (push side needs `write:packages`; pull only needs read).
+The golden image is a **private** ghcr package. Use **two classic PATs**
+(least privilege — a read token sprayed to many clusters shouldn't be able to
+overwrite the image):
+
+| PAT | Scope | Used by | Wrapped as |
+|---|---|---|---|
+| **read token** | `read:packages` | every cluster that **consumes** the image | `ghcr-cdi` (§ 1a) |
+| **write token** | `write:packages` (+`read:packages`) | the **build host** only | `ghcr-push` (§ 1c, `golden-image-build.md`) |
+
+Create both at GitHub → **Settings → Developer settings → Personal access
+tokens → Tokens (classic) → Generate new token (classic)**, copy each `ghp_…`,
+and keep them in **environment variables** (or your own secret store) — never
+hardcode a PAT in a committed file.
+
+### 1a. Pull secret (`ghcr-cdi`) — every consuming cluster
 
 CDI's `registry` source wants `accessKeyId` / `secretKey` keys (NOT a
-dockerconfigjson). Create it directly (run it yourself so the PAT is not pasted
-into logs/chat):
+dockerconfigjson). `accessKeyId` is your **GitHub username** (e.g. `vebutton`),
+**not an email** — ghcr rejects an email. Supply the PAT via env var:
 
 ```bash
+export GHCR_USER=<github-username>
+export GHCR_READ_PAT=<read-PAT>
+# from the committed template (safe — PAT comes from the env, not the file):
+envsubst < docs/ghcr-secret.example.yaml | oc apply -n $NS -f -
+# …or without a file:
 oc create secret generic ghcr-cdi -n $NS \
-  --from-literal=accessKeyId=<your-github-username> \
-  --from-literal=secretKey=<your-PAT>
+  --from-literal=accessKeyId="$GHCR_USER" --from-literal=secretKey="$GHCR_READ_PAT"
 ```
 
-> `accessKeyId` is your **GitHub username** (e.g. `vebutton`), not an email —
-> ghcr rejects an email here.
+> Apply it in **every namespace that pulls** the image — including
+> `openshift-virtualization-os-images` if you use the DataImportCron (§ 2b).
 
-If you also drive the catalog boot source via a DataImportCron (§ 2b), the same
-secret must exist in `openshift-virtualization-os-images`.
+### 1c. Push secret (`ghcr-push`) — build host only
+
+Building/pushing the containerDisk (buildah) uses a **docker-registry** secret
+made from the **write** PAT:
+
+```bash
+export GHCR_WRITE_PAT=<write-PAT>
+oc create secret docker-registry ghcr-push -n <build-ns> \
+  --docker-server=ghcr.io --docker-username="$GHCR_USER" --docker-password="$GHCR_WRITE_PAT"
+```
+(See `golden-image-build.md` for the build/push job that consumes it.)
 
 ---
 
@@ -85,8 +110,14 @@ To make the image selectable in the console's "create VM from template" flow,
 register it as a managed boot source. **Use a DISTINCT `managedDataSource`
 name** so you do not clobber a shared/engineering `win2k25` DataSource on the
 cluster. See the ready manifest in
-`collateral/win2k25-golden-dataimportcron.yaml`
+[`win2k25-golden-dataimportcron.yaml`](win2k25-golden-dataimportcron.yaml)
 (`managedDataSource: win2k25-trilio-golden`, `secretRef: ghcr-cdi`, WFFC SC).
+
+> The golden-image **build** recipe lives alongside this guide too:
+> [`win2k25-golden-autounattend.xml`](win2k25-golden-autounattend.xml) and
+> [`win2k25-golden-post-install.ps1`](win2k25-golden-post-install.ps1) are the
+> two keys of the build ConfigMap consumed by the `windows-efi-installer`
+> pipeline (virtio + QGA + OpenSSH + host-key wipe).
 
 > **Why the catalog sometimes clones the "wrong" (old) image:** a template's
 > default disk is a **DataSource**, fed by either a **DataImportCron** or a

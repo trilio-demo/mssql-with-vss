@@ -1,0 +1,58 @@
+# =============================================================================
+# win2k25-golden-dataimportcron.yaml
+# =============================================================================
+# Populates an OpenShift Virtualization *catalog boot source* from the Trilio
+# win2k25 golden containerDisk in ghcr — WITHOUT clobbering a cluster's existing
+# engineering "win2k25" DataSource (uses a DISTINCT managedDataSource).
+#
+# How OCP's catalog works: a VM template's default disk is a DataSource
+# (referenced via dataVolumeTemplates[].sourceRef). A DataSource is fed either
+# by a DataImportCron (this file) or a manually-managed static PVC. If a
+# cluster's "win2k25" DataSource is a STATIC PVC (no cron), the template keeps
+# cloning that old image regardless of what you upload — hence a distinct cron.
+#
+# Prereqs:
+#   - ghcr-cdi secret (keys: accessKeyId, secretKey) in
+#     openshift-virtualization-os-images  [private-package pull creds; see
+#     win2k25-vm-prep.md § 1]
+#
+# Result: a NEW DataSource "win2k25-trilio-golden". Create a VM from it (or
+# clone it); docs/unattend.xml then personalizes on first boot — including the
+# NIC-MTU fix and `slmgr /ato` that together unlock the full ~180-day eval
+# (see win2k25-vm-prep.md § 4 / § 4a). On clusters that genuinely block outbound
+# 443 to *.sls.microsoft.com, activation is a no-op and the clone keeps the
+# 10-day grace until egress is available.
+# =============================================================================
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataImportCron
+metadata:
+  name: win2k25-trilio-golden
+  namespace: openshift-virtualization-os-images
+  labels:
+    # surfaces the managed DataSource as a Windows-2025 boot source in the console
+    instancetype.kubevirt.io/default-preference: windows.2k25.virtio
+spec:
+  # DISTINCT name — deliberately NOT "win2k25", so a shared/engineering boot
+  # source on the cluster is left untouched.
+  managedDataSource: win2k25-trilio-golden
+  # Daily digest poll. With the pinned dated tag below this is effectively
+  # import-once (no-op until the tag's digest changes). To get auto-refresh on
+  # every re-bake, push a moving tag (…:latest) and point `url` at it instead.
+  schedule: "0 6 * * *"
+  garbageCollect: Outdated
+  importsToKeep: 2
+  template:
+    spec:
+      source:
+        registry:
+          url: "docker://ghcr.io/trilio-demo/win2k25-golden:2026-06-16"
+          secretRef: ghcr-cdi
+      storage:
+        # Use the cluster's WaitForFirstConsumer StorageClass. On node-local
+        # backends (e.g. TopoLVM/LVMS) a WFFC SC provisions at consumer-schedule
+        # time and avoids the Immediate-binding device race that hangs multi-disk
+        # VMs. Replace with your cluster's WFFC SC name.
+        storageClassName: lvms-topolvm
+        resources:
+          requests:
+            storage: 21Gi

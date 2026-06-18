@@ -14,6 +14,11 @@ build/
 *.pem
 *.key
 secrets/
+# Filled-in GHCR secret manifests (the *.example.yaml template is safe to commit;
+# a real filled copy named ghcr-secret.yaml must never be)
+ghcr-secret.yaml
+**/ghcr-secret.yaml
+vault.yml
 
 # Node (if needed)
 node_modules/
