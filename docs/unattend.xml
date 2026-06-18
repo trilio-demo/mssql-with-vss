@@ -268,7 +268,7 @@
 
         1400 matches the standard OVN-Kubernetes pod MTU. If your cluster
         differs, set this to the launcher pod's eth0 MTU
-        (`oc exec <virt-launcher-pod> -c compute -- cat /sys/class/net/eth0/mtu`).
+        (`oc exec <virt-launcher-pod> -c compute cat /sys/class/net/eth0/mtu`).
         ============================================================
         -->
         <SynchronousCommand wcm:action="add">
