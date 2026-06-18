@@ -162,15 +162,19 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-06-18):** Corrected a months-old misdiagnosis — the
-"GitHub CDN egress block" that drove SSH off the clone-time unattend was the
-**NIC MTU black-hole** all along (A/B proven: guest MTU 1500 → stall/timeout;
-1400 → fast). Locked two architecture decisions (keep SSH **baked**; keep the
-**GitHub-zip** install — both stay as-is). Added MTU insurance to the golden
-`post-install.ps1`; corrected/expanded the prep docs; rewrote
-`docs/golden-image-build.md` (Server-2025-centric + the configmap/pipeline
-procedure). Shipped + pushed as `7884580`. No POC/lab tracks moved — golden-image
-infra again.
+**Last session (2026-06-18 — long, multi-thread):** (1) Corrected a months-old
+misdiagnosis — the "GitHub CDN egress block" was the **NIC MTU black-hole**
+(A/B proven: 1500 → stall; 1400 → fast). (2) Migrated to on-demand session-state
+routing and split internal identifiers into the gitignored `CLAUDE.local.md`.
+(3) **Rebuilt + distributed the win2k25 golden image** — and the rebake surfaced
+that **Server 2025 ships OpenSSH Server inbox**: the prior GitHub-zip install
+broke the inbox firewall rule's app-lock (caught by validating a clone *before*
+distributing). Fixed the recipe to use inbox SSH, re-baked **`win2k25-v1`**,
+validated it, and packaged+pushed it as the new registry tag via a **new
+reusable in-cluster export Job** (`manifests/golden-containerdisk-push.yaml`;
+there's no native CDI export-to-registry). Commits `7884580`, `1a69219`,
+`52f08ad`, `39b1d13` on `origin/main`. POC/lab tracks still untouched —
+golden-image infra all day.
 
 **Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
 - **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
@@ -178,30 +182,38 @@ infra again.
   State unverified since 2026-06-01; eval grace ended 2026-06-03.
 - **Consume/validate cluster (LVMS/TopoLVM)** — the consume SQL VM Running
   (MTU 1400, activated to 12/14/2026, SSH via NodePort, **no SQL yet**); catalog
-  boot source `win2k25-trilio-golden` imports the golden image from the registry.
-- **Build cluster (Ceph RBD)** — golden-image BUILD cluster. `win2k25` DV = the
-  golden master; pipeline `windows-efi-installer` v4.21.0 in the build namespace.
+  boot source `win2k25-trilio-golden` (DataImportCron) imports the registry image.
+  *(Cron still points at the OLD tag until the bumped manifest is applied here.)*
+- **Build cluster (Ceph RBD)** — golden-image BUILD cluster. **`win2k25-v1` DV =
+  the NEW validated golden** (inbox SSH); `win2k25` = old fallback. Registry tag
+  `:2026-06-18` pushed. Pipeline `windows-efi-installer` v4.21.0 in the build ns.
 
 **Open items (priority order):**
-1. **Rebake the `win2k25` golden image on the build cluster** to bake the firewall
-   `-Profile Any` fix + the new MTU insurance (the current registry image has
-   neither). Sync configmap `windows2k25-autounattend-golden` from
-   `docs/win2k25-golden-post-install.ps1` → run the pipeline → in-cluster buildah
-   repackage → push a new tag (consider a moving `:latest`) → bump the
-   DataImportCron `url:`. Then **drop the per-clone § 5c firewall step** from
-   `docs/win2k25-vm-prep.md`.
-2. **Install SQL Server** on the consume SQL VM if continuing lab work on
-   the consume cluster (§ 6 of prep doc); BackupPlan/Restore then need adapting
-   for the TopoLVM `VolumeSnapshotClass`.
-3. **MSSQL-VSS POC tracks (primary deliverable, still untouched)** — Trilio
+1. **Validate the new golden on the consume cluster + drop § 5c.** Apply the
+   bumped DataImportCron (`:2026-06-18`) there, clone a real VM, and confirm
+   **SSH works with NO § 5c firewall step** — the true end-to-end test (build-side
+   validation was config-level only: inbox sshd at `system32\OpenSSH`, app-matched
+   rule broadened to all profiles). Once it passes, **drop § 5c** from
+   `docs/win2k25-vm-prep.md` and retire the old `:2026-06-16` tag + `win2k25` DV.
+2. **Apply the port-based-rule fix to the 2022 golden recipe** (gitignored
+   `collateral/configmap-win2k22-golden-v2.yaml`) — 2022 has no inbox OpenSSH, so
+   it keeps GitHub-zip + a uniquely-named port-based `-Profile Any` rule. For the
+   future-2022 path (customer-2022 analysis).
+3. **Install SQL Server** on the consume SQL VM if continuing lab work there
+   (§ 6 of prep doc); BackupPlan/Restore then need adapting for the TopoLVM
+   `VolumeSnapshotClass`.
+4. **MSSQL-VSS POC tracks (primary deliverable, still untouched)** — Trilio
    virt-launcher hook (QGA-exec lifecycle); in-guest VSS component requestor
    ("Mechanism E"; deferred Q: does it work via QGA freeze/thaw alone?); demo to
    engineering.
-4. **Send the customer reply + internal status email** — drafts at
+5. **Send the customer reply + internal status email** — drafts at
    `private-docs/2026-06-01-*.md`, never sent.
-5. **Carried POC/evidence work:** Python write generator → backup #2 under load →
+6. **Carried POC/evidence work:** Python write generator → backup #2 under load →
    FLR demo → BackupPlan v2 (Routes + host-rewrite) → bundle `output/` for the
    blog agent → Confluence article + blog. (Detail in § Project Status.)
+
+   *Build-cluster cleanup pending: the completed `golden-cdisk-push-*` Job + the
+   60Gi `win2k25-build-scratch` PVC (reusable — keep for next export).*
 
 **Continuity reminders:**
 - **Be deliberate about which cluster you touch** — three live footprints on
