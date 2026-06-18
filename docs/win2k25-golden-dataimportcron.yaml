@@ -47,7 +47,7 @@ spec:
     spec:
       source:
         registry:
-          url: "docker://ghcr.io/trilio-demo/win2k25-golden:2026-06-16"
+          url: "docker://ghcr.io/trilio-demo/win2k25-golden:2026-06-18"
           secretRef: ghcr-cdi
       storage:
         # Use the cluster's WaitForFirstConsumer StorageClass. On node-local

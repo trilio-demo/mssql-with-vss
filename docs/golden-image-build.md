@@ -194,17 +194,84 @@ collision) — proves the host-key wipe worked.
 
 ---
 
-## After the image is built — distribute it
+## After the image is built — package + push it (the "export")
 
 The golden DV lives on the build cluster. To make it consumable everywhere,
-package it as an OCI **containerDisk** (disk at `/disk/`), push to a registry
-all clusters reach (lab uses `ghcr.io/trilio-demo/win2k25-golden:<date-tag>`),
-and consume via a `registry:` DataVolume or the
-[`win2k25-golden-dataimportcron.yaml`](win2k25-golden-dataimportcron.yaml)
-catalog boot source. Build the containerDisk **in-cluster** (a buildah Job) —
-the Mac `virtctl vmexport download` is unreliable on multi-GB pulls. Full
-consume-side setup (GHCR secrets, the two-namespace pull-secret gotcha) is in
-`win2k25-vm-prep.md` § 1–2.
+wrap it as an OCI **containerDisk** (disk at `/disk/`) and push to a registry
+all clusters reach (lab uses `ghcr.io/trilio-demo/win2k25-golden:<date-tag>`).
+
+**There is no native CDI/KubeVirt export-to-registry primitive.** `DataImportCron`
+is import-only; the only export CR, `VirtualMachineExport`, just serves the disk
+over HTTP for download (the `virtctl vmexport download` path — unreliable on
+multi-GB pulls from a Mac: ephemeral-port exhaustion). So the packaging step is a
+**build**, run **in-cluster** with buildah.
+
+### 1. One-time: push secret + builder ServiceAccount (build cluster)
+
+Create a GitHub **classic PAT with `write:packages`** (separate from the read PAT
+the consumers use). Never commit it — pass via env:
+
+```bash
+NS=<build-namespace>
+export GHCR_USER=<github-username>          # your GH username, not email
+export GHCR_WRITE_PAT=<token-with-write:packages>
+
+# docker-registry push secret (the Job mounts this as REGISTRY_AUTH_FILE)
+oc create secret docker-registry ghcr-push \
+  --docker-server=ghcr.io \
+  --docker-username="$GHCR_USER" \
+  --docker-password="$GHCR_WRITE_PAT" \
+  -n "$NS"
+
+# builder SA (buildah needs privileged: it mounts the source PVC as a block
+# device and runs the vfs storage driver)
+oc create sa cdisk-builder -n "$NS"
+oc adm policy add-scc-to-user privileged -z cdisk-builder -n "$NS"
+```
+
+(GHCR uses two least-privilege PATs: **write** here on the build host, **read**
+on every consuming cluster — see `win2k25-vm-prep.md` § 1.)
+
+### 2. Scratch PVC (60Gi — do not shrink)
+
+The vfs storage driver **duplicates** the ~8 GB image layer during `buildah bud`,
+so the scratch must hold the qcow2 **plus** the duplicated layer **plus** overhead:
+
+```bash
+# 60Gi, Filesystem, on any working SC
+oc create -n "$NS" -f - <<'EOF'  # (or apply your own PVC manifest)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: win2k25-build-scratch }
+spec:
+  accessModes: [ReadWriteOnce]
+  volumeMode: Filesystem
+  resources: { requests: { storage: 60Gi } }
+EOF
+```
+
+### 3. Run the package+push Job
+
+Use the committed, reusable Job
+[`../manifests/golden-containerdisk-push.yaml`](../manifests/golden-containerdisk-push.yaml).
+It runs **one** buildah/stable container that: `microdnf install qemu-img` →
+`qemu-img convert` the source **Block** PVC → `/work/disk.qcow2` → `buildah bud`
+(`FROM scratch` + `ADD disk.qcow2 /disk/`) → `buildah push --retry` (survives the
+occasional http2 drop). Edit two fields per rebake — the **source PVC** (`volumes:
+winsrc`, must be `volumeMode: Block`) and the **`IMAGE_TAG`** env — then:
+
+```bash
+oc create -f manifests/golden-containerdisk-push.yaml      # generateName -> unique
+oc logs -f job/<generated-name> -n "$NS"                   # ~15 min: convert + build + push
+```
+
+### 4. Consume it
+
+Point a `registry:` DataVolume or the catalog
+[`win2k25-golden-dataimportcron.yaml`](win2k25-golden-dataimportcron.yaml) at the
+new tag. Consume-side setup — the `ghcr-cdi` **read** pull secret and the
+**two-namespace gotcha** (it must exist in *both* `openshift-virtualization-os-images`
+**and** `openshift-cnv`) — is in `win2k25-vm-prep.md` § 1–2.
 
 ---
 

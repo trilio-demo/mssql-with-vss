@@ -1,0 +1,94 @@
+# =============================================================================
+# golden-containerdisk-push.yaml
+# =============================================================================
+# Reusable in-cluster "export" Job: package a golden-image DataVolume/PVC as an
+# OCI containerDisk and push it to a registry. There is NO native CDI/KubeVirt
+# "export-to-registry" primitive (DataImportCron is import-only; the only export
+# CR, VirtualMachineExport, just serves the disk over HTTP for download). So the
+# containerDisk packaging step needs a build -- this Job is it.
+#
+# One container does both stages (buildah/stable + qemu-img via microdnf):
+#   1. qemu-img convert the SOURCE block PVC -> /work/disk.qcow2
+#   2. buildah: FROM scratch + ADD disk.qcow2 /disk/  -> push to the registry
+#
+# TO REUSE (per rebake): edit the two spots marked  # <<< EDIT
+#   - the source PVC claimName (volumes: winsrc)
+#   - the IMAGE_TAG env (and REGISTRY_IMAGE if the repo changes)
+#
+# DISK SPACE: the vfs storage driver DUPLICATES the ~8 GB image layer during
+# `buildah bud`, so /work needs the qcow2 + the duplicated layer + overhead ->
+# the 60Gi scratch PVC below. Do NOT shrink it.
+#
+# Prereqs (build cluster): ServiceAccount `cdisk-builder` (privileged SCC),
+# docker-registry push secret `ghcr-push`, and the 60Gi `win2k25-build-scratch`
+# PVC (Filesystem). Registry egress required.
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: golden-cdisk-push-
+  # namespace intentionally omitted -- create with `oc create -f ... -n <build-ns>`
+  labels:
+    app: golden-containerdisk-push
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: cdisk-builder
+      containers:
+        - name: push
+          image: quay.io/buildah/stable:latest
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          env:
+            - name: REGISTRY_IMAGE
+              value: "ghcr.io/trilio-demo/win2k25-golden"
+            - name: IMAGE_TAG
+              value: "2026-06-18"            # <<< EDIT per rebake
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              echo "=== install qemu-img ==="
+              microdnf -y install qemu-img
+              echo "=== scratch free space (need ~60Gi for vfs layer dup) ==="
+              df -h /work
+              rm -rf /work/storage /work/Containerfile /work/disk.qcow2
+              echo "=== convert source block device -> qcow2 ==="
+              qemu-img convert -p -f raw -O qcow2 /dev/winsrc /work/disk.qcow2
+              ls -lh /work/disk.qcow2
+              cd /work
+              printf 'FROM scratch\nADD disk.qcow2 /disk/\n' > Containerfile
+              export REGISTRY_AUTH_FILE=/auth/.dockerconfigjson
+              B="buildah --root /work/storage --storage-driver vfs"
+              echo "=== build ${REGISTRY_IMAGE}:${IMAGE_TAG} ==="
+              $B bud -t "${REGISTRY_IMAGE}:${IMAGE_TAG}" -f Containerfile .
+              df -h /work
+              echo "=== push (retries for the occasional http2 drop) ==="
+              $B push --retry 10 --retry-delay 20s "${REGISTRY_IMAGE}:${IMAGE_TAG}"
+              echo "=== DONE: ${REGISTRY_IMAGE}:${IMAGE_TAG} ==="
+          volumeDevices:
+            - name: winsrc
+              devicePath: /dev/winsrc
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: auth
+              mountPath: /auth
+              readOnly: true
+      volumes:
+        - name: winsrc
+          persistentVolumeClaim:
+            claimName: win2k25-v1            # <<< EDIT per rebake (source golden DV/PVC, Block mode)
+        - name: work
+          persistentVolumeClaim:
+            claimName: win2k25-build-scratch
+        - name: auth
+          secret:
+            secretName: ghcr-push
+            items:
+              - key: .dockerconfigjson
+                path: .dockerconfigjson
