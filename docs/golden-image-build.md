@@ -66,16 +66,25 @@ edit the files and rebuild.
 ### `win2k25-golden-post-install.ps1` (audit-mode customize)
 Everything here lands in the image:
 - **virtio-win guest drivers** (KubeVirt disk/NIC) + **QEMU Guest Agent**.
-- **NIC MTU → 1400 before any download** (build-robustness insurance — Windows
-  ignores DHCP MTU and stalls large HTTPS transfers on a 1400 overlay; see
-  win2k25-vm-prep.md § 4a). Generalize resets it, so clone-side MTU stays
-  `unattend.xml` Order 4's job.
-- **OpenSSH Server via the GitHub release zip** (Microsoft's official binaries,
-  different channel than the Windows-Update FOD — see build-breakers), service
-  `Automatic`, **firewall rule on `-Profile Any`** (the masquerade net is
-  classified `Public`; a Private-only rule silently drops inbound SSH),
-  PowerShell as `DefaultShell`.
-- **Host-key wipe** before generalize so every clone gets unique SSH host keys.
+- **NIC MTU → 1400, set early** (insurance). Generalize resets it, so it does
+  *not* carry to the clone — clone-side MTU is `unattend.xml` Order 4's job (the
+  effective fix for activation + large transfers; see win2k25-vm-prep.md § 4a).
+  Kept in the bake as harmless early insurance.
+- **OpenSSH Server: use the INBOX install.** Windows Server **2025 ships OpenSSH
+  Server installed inbox** (`OpenSSH.Server` = Installed; binaries at
+  `system32\OpenSSH`; `sshd` registered; a predefined firewall rule app-locked
+  to `system32\OpenSSH\sshd.exe`). So the 2025 recipe does **not** download
+  anything — it just sets `sshd` `Automatic` and broadens the existing
+  (already app-matched) firewall rule to `-Profile Any` (the masquerade net is
+  classified `Public`; a Private-only rule silently drops inbound SSH).
+  **Do NOT GitHub-zip install on 2025** — it drops a second sshd in
+  `C:\Program Files\OpenSSH` and repoints the service there, breaking the inbox
+  rule's app-lock and silently blocking inbound SSH (caught 2026-06-18 by
+  validating a clone before distribution). *Server **2022** does NOT ship OpenSSH
+  inbox → its golden recipe keeps the **GitHub-zip + a uniquely-named,
+  port-based (`-LocalPort 22`, no `-Program`) `-Profile Any` rule** instead.*
+- **Host-key wipe** before generalize so every clone gets unique SSH host keys
+  (the inbox capability install may have pre-generated host keys → wipe them).
   Does **not** bake `authorized_keys` (key upload stays per-clone).
 
 ---
@@ -160,7 +169,8 @@ it on a test clone (below), then distribute it.
 | Anti-pattern | What happens | Do instead |
 |---|---|---|
 | `dism /Set-Edition` (inline edition conversion) before sysprep | Set-Edition stages a pending-reboot; `sysprep /generalize` refuses (`hr=0x8007139f`); the VM never powers off → `wait-for-vmi-status` hangs forever | **No edition conversion.** Boot the eval ISO, pick the edition via `/IMAGE/INDEX`, activate per-clone with `slmgr /ato`. |
-| OpenSSH via `Add-WindowsCapability` (Windows-Update FOD) | FOD endpoint (`fe2.update.microsoft.com`) is commonly blocked; on the old golden image DISM also lied (`Installed`, no binaries) | **GitHub release zip** — `github.com` + its CDN are reachable from the bake cluster; no FOD, no DISM-stack dependency, version-pinnable. |
+| GitHub-zip OpenSSH install on **Server 2025** | 2025 already ships OpenSSH Server inbox (`system32\OpenSSH`) with an app-locked firewall rule; a zip install drops a second sshd in `C:\Program Files\OpenSSH` and repoints the service there, breaking the rule's app-lock → inbound SSH silently blocked (caught 2026-06-18) | **2025: use the inbox install** — `Set-Service sshd Automatic` + broaden the existing rule to `-Profile Any`. No download. |
+| OpenSSH via `Add-WindowsCapability` (Windows-Update FOD) on **Server 2022** | FOD endpoint (`fe2.update.microsoft.com`) is commonly blocked; on the old golden image DISM also lied (`Installed`, no binaries) | **2022 only** (it has no inbox OpenSSH): **GitHub release zip** + a uniquely-named, port-based `-Profile Any` rule — `github.com` + CDN reachable, no FOD/DISM dependency. |
 | Treating the 10-day clock as the eval length | Wasted effort chasing licensed ISOs / `slmgr /rearm` | It's the **activate-by** deadline; `slmgr /ato` unlocks ~180 days. |
 | Starting sshd during the build without wiping host keys | Every clone ships identical SSH host keys | Set sshd `Automatic` but don't start it; **wipe `C:\ProgramData\ssh\ssh_host_*`** before generalize. |
 | Large download before setting MTU | Stalls/timeouts that look like an egress block | Set NIC **MTU 1400 first** (already first in `post-install.ps1`). |

@@ -4,9 +4,11 @@
 # ForceShutdownNow captures the image. Everything here lands in the image.
 #
 # Based on the stock windows2k25-autounattend post-install (virtio + QGA),
-# extended with the OpenSSH bake proven working on this cluster (2026-06-15).
-# 2025 needs NO edition conversion / no <servicing> block, so there is no
-# Set-Edition (which broke sysprep on the 2022 attempt) -- this is clean.
+# plus: enable the INBOX OpenSSH Server (2025 ships it installed -- corrected
+# 2026-06-18 after a GitHub-zip install was found to break the inbox firewall
+# rule's app-lock) and a host-key wipe. 2025 needs NO edition conversion /
+# no <servicing> block, so there is no Set-Edition (which broke sysprep on the
+# 2022 attempt) -- this is clean.
 # =========================================================================
 
 # --- virtio guest drivers (required: KubeVirt disk/NIC) ------------------
@@ -15,39 +17,36 @@ Start-Process msiexec -Wait -ArgumentList "/i E:\virtio-win-gt-x64.msi /qn /pass
 # --- QEMU Guest Agent (LOAD-BEARING for the VSS lab; Trilio drives VSS via it) -
 Start-Process msiexec -Wait -ArgumentList "/i E:\guest-agent\qemu-ga-x86_64.msi /qn /passive /norestart"
 
-# --- NIC MTU insurance BEFORE any download (build robustness) ------------
-# Windows ignores the DHCP MTU option and stays at 1500. On a cluster whose
-# overlay MTU is smaller (OVN-Kubernetes = 1400), full-size 1500-byte frames
-# from a large HTTPS transfer are black-holed -- the TLS handshake + small
-# requests succeed (so the host "looks reachable") but the zip download stalls
-# and times out. This is exactly what masqueraded as an "egress block" on
-# objects.githubusercontent.com; isolated to MTU by an A/B test 2026-06-18
-# (1400 -> 4.6 MB in 1.4 s; 1500 -> stall/timeout, same URL/path). 1400 is
-# <= any standard path, so it is always safe here. (generalize resets this on
-# the clone; clone-side MTU is handled separately by unattend.xml Order 4.)
+# --- NIC MTU 1400, set early (insurance) ---------------------------------
+# Windows ignores the DHCP-advertised MTU and stays at 1500; on a 1400 OVN
+# overlay that black-holes large HTTPS transfers and activation (slmgr /ato ->
+# 0x80072EE2). Isolated to MTU by an A/B test 2026-06-18 (1400 -> 4.6 MB in
+# 1.4 s; 1500 -> stall/timeout, same URL/path).
+# NOTE: this bake-time setting does NOT survive sysprep /generalize (the clone
+# re-enumerates its NIC), so the EFFECTIVE fix is clone-side in unattend.xml
+# Order 4 (before /ato). Kept here as harmless early insurance in case anything
+# in audit mode ever needs the network -- today nothing does (SSH is inbox,
+# virtio/QGA come from the local ISO).
 netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 
-# --- OpenSSH Server via GitHub zip (Windows Update FOD is unreachable from
-#     this bake cluster; github.com + release CDN ARE reachable -- verified
-#     2026-06-15. Bake-time egress is this cluster's; once baked, clones need
-#     no egress for SSH). ---------------------------------------------------
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$zip = 'C:\Windows\Temp\OpenSSH-Win64.zip'
-Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip' -OutFile $zip
-Expand-Archive -Path $zip -DestinationPath 'C:\Program Files\OpenSSH' -Force
-# the zip extracts into a versioned subfolder (OpenSSH-Win64); flatten it
-$src = (Get-ChildItem 'C:\Program Files\OpenSSH' -Directory | Select-Object -First 1).FullName
-if ($src) { Move-Item "$src\*" 'C:\Program Files\OpenSSH\' -Force; Remove-Item $src -Recurse -Force }
-powershell.exe -ExecutionPolicy Bypass -File 'C:\Program Files\OpenSSH\install-sshd.ps1'
+# --- OpenSSH Server: USE THE INBOX install (Server 2025 ships it) ----------
+# Windows Server 2025 ships OpenSSH Server as an *installed* inbox capability
+# (OpenSSH.Server = Installed; binaries at %SystemRoot%\system32\OpenSSH;
+# `sshd` service registered; a predefined firewall rule 'OpenSSH-Server-In-TCP'
+# app-locked to %SystemRoot%\system32\OpenSSH\sshd.exe). So NO download is
+# needed -- and do NOT GitHub-zip install: that drops a second sshd in
+# C:\Program Files\OpenSSH and repoints the service there, away from the path
+# the inbox firewall rule expects, which silently blocks inbound SSH (caught
+# 2026-06-18 validating a clone of the prior bake). Just enable the inbox
+# service and broaden its (already app-matched) firewall rule to all profiles
+# -- the KubeVirt masquerade network is classified "Public" in the guest, and a
+# Private-only rule would drop all inbound SSH while sshd answers on loopback.
+# (Server 2022 does NOT ship OpenSSH inbox -> its golden recipe keeps the
+# GitHub-zip + uniquely-named port-based rule approach.)
 Set-Service -Name sshd -StartupType Automatic    # Automatic, but do NOT start now
-# Inbound 22 allow on ALL profiles. CRITICAL: KubeVirt masquerade networks are
-# classified "Public" in the guest; a Private-only rule (the default some OpenSSH
-# installs create) silently drops all inbound SSH from the pod/NodePort while
-# sshd still answers on loopback. Force -Profile Any AND broaden any pre-existing
-# OpenSSH rule the install may have created.
-New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
-  -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -Profile Any
-Get-NetFirewallRule -DisplayName 'OpenSSH*' -ErrorAction SilentlyContinue | Set-NetFirewallRule -Profile Any
+Get-NetFirewallRule -DisplayName 'OpenSSH*' -ErrorAction SilentlyContinue |
+  Set-NetFirewallRule -Profile Any -Enabled True
+# DefaultShell = PowerShell (so SSH sessions land in PS, not cmd)
 New-Item -Path 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell `
   -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force
