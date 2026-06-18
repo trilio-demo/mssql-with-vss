@@ -10,9 +10,8 @@ A lab POC to demonstrate that **Trilio for Kubernetes (TVK)** can take
 **application-consistent** backups of **Microsoft SQL Server** running inside
 a **Windows VM on OpenShift Virtualization (OCPv / KubeVirt)** — and recover
 from them, including surgical file-level restore. The lab exists to answer a
-specific technical inquiry from Erick Saidon (Infrastructure Engineer, City of
-Delray Beach), a re-entry opportunity after losing the deal to Veeam in
-October 2025.
+specific technical inquiry from a customer (named customer + competitive
+context in the gitignored `CLAUDE.local.md`).
 
 Two related deliverables:
 1. **Lab evidence** proving the QGA → Windows VSS Writer handshake works
@@ -58,7 +57,7 @@ question goes beyond the MVP framing above.
   - Live lab: OCPv cluster, Windows Server VM, MS SQL Server, Trilio operator.
 - **Output:** Lab evidence bundle in `output/` — event-log captures,
   Trilio UI screenshots, restore transcripts, sequence/architecture diagrams.
-  Also: a customer-facing technical response to Erick once the lab is verified.
+  Also: a customer-facing technical response once the lab is verified.
 
 ## Interface
 Claude Code CLI, plus hands-on cluster work (`oc`, Trilio UI, RDP/console into
@@ -97,9 +96,16 @@ the Windows VM).
 - First started: CLI
 - Date: 2026-05-06
 
+## Identifiers — local-only
+Clusters, VMs, the golden-image registry, the S3 bucket, and the customer are
+referenced below by **role-label** (e.g. *evidence cluster (Portworx)*,
+*consume SQL VM*, *the lab S3 bucket*). Real names, URLs, IPs, NodePorts, and
+credentials live in the gitignored `CLAUDE.local.md` (auto-loaded at session
+start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
+
 ## Project Status
 - [x] Demo scope locked: **DB-only with Python write generator (inside the Windows VM)**
-- [x] Cluster locked: **`ocp-px`** (OCP 4.18.19, OCPv + Trilio already installed; Portworx storage)
+- [x] Cluster locked: **the evidence cluster (Portworx)** (OCP 4.18.19, OCPv + Trilio already installed)
 - [x] Python tooling set up (pyenv 3.13.13 + uv) — driver: `pyodbc` + MS ODBC Driver 18 (added when generator is written)
 - [x] Trilio licensed on all clusters
 - [x] Windows version: **Server 2022** (DataSource `win2k22` already defined on cluster)
@@ -108,11 +114,11 @@ the Windows VM).
 - [x] PDF inspector tool: `src/pdf_inspect.py` (pymupdf) — reusable for any collateral PDF; supports `--render-all`
 - [x] `docs/windows-vm-prep.md` rewritten for the golden-image flow (verbatim Sysprep `unattend.xml` from engineering guide, post-boot config, NodePort exposure, SQL install)
 - [x] Golden image uploaded as DataVolume `win2k22` (Portworx, RWO block — Ceph SC was orphaned)
-- [x] VM created from catalog template — name **`win2k22-aqua-junglefowl-90`** in `mssql-vss-lab`
+- [x] VM created from catalog template — **the evidence SQL VM** in `mssql-vss-lab`
 - [x] Secure Boot + SMM patched off (image bootloader signing chain didn't match OVMF secboot trust); Windows booted, Sysprep ran clean
 - [x] QGA verified running, RDP enabled, OpenSSH Server installed and running (password auth)
-- [x] NodePort exposure: RDP `31211`, SSH `31256` on worker IPs (e.g. `172.31.1.56`)
-- [x] SSH Service selector fixed (`vm.kubevirt.io/name: win2k22-aqua-junglefowl-90` — prep doc YAML had used `kubevirt.io/domain: mssql-lab` which doesn't match the launcher pod's labels)
+- [x] NodePort exposure: RDP + SSH on worker IPs (ports/IPs in `CLAUDE.local.md`)
+- [x] SSH Service selector fixed (`vm.kubevirt.io/name: <evidence SQL VM>` — prep doc YAML had used `kubevirt.io/domain: mssql-lab` which doesn't match the launcher pod's labels)
 - [x] MS SQL Developer Edition installed (**SQL Server 2025**, named instance `MSSQLSERVER01`, default instance was *not* selected) — confirmed via screenshot `collateral/MSSQL-installed-screen.png`
 - [x] **Windows eval rearmed (2026-05-24).** Engineering golden image is Datacenter Evaluation, build `20348.fe_release.210507` (May 2021). `slmgr /rearm` + reboot took the VM out of `Notification` mode; `slmgr /xpr` now shows `Initial grace period ends 6/3/2026 4:27 PM` — only ~10 days, not the documented 180 (rearm-after-expiry quirk). Reboot loop expected to be dead; verify with `oc logs -n openshift-cnv deployment/virt-controller --since=2m | grep <vm>` over the next ~70 min. 4 rearms remaining.
 - [x] **Data disk online (2026-05-25).** 20 GiB virtio disk `disk-copper-cheetah-64` initialized in Windows as **`D:`** (NTFS, label `Data`). CDs (`virtio-win`, `sysprep`) detached. SQL default Data/Log/Backup paths relocated to `D:\SQL{Data,Log,Backup}\` via `xp_instance_regwrite`. Smoke test passed: `demo_db.mdf` / `demo_db_log.ldf` / `demo_db_smoke.bak` all on D:.
@@ -120,7 +126,7 @@ the Windows VM).
 - [ ] SSMS install (deferred — `sqlcmd -C` works fine for everything we need; revisit if a customer-facing screenshot demands it).
 - [x] Done-state verified: `SQLWriter` + `MSSQL$MSSQLSERVER01` services Running; `sqlcmd -S .\MSSQLSERVER01 -E -C` returns banner; `demo_db` ONLINE.
 - [x] SSH public-key auth working — root cause was `administrators_authorized_keys` written as UTF-16 LE + BOM (PowerShell/editor default); rewritten as plain ASCII via `[System.IO.File]::WriteAllText(..., [System.Text.Encoding]::ASCII)`. Fix + verification baked into `docs/windows-vm-prep.md` § 4e.
-- [x] **Trilio BackupPlan created (2026-05-25).** `mssql-vss-lab/mssql-vss-backupplan` — VM-scoped (gvkSelector → `win2k22-aqua-junglefowl-90`), target `sa-nfs-cr-demo` (auto-replicated from `trilio-system`), retention `trilio-latest-retention-policy` (latest 5), **trigger-only** (no schedule). Manifests in `manifests/`.
+- [x] **Trilio BackupPlan created (2026-05-25).** `mssql-vss-lab/mssql-vss-backupplan` — VM-scoped (gvkSelector → the evidence SQL VM), target `sa-nfs-cr-demo` (auto-replicated from `trilio-system`), retention `trilio-latest-retention-policy` (latest 5), **trigger-only** (no schedule). Manifests in `manifests/`.
 - [ ] Write Python write generator (continuous INSERTs into `demo_db`)
 - [x] **First backup completed (2026-05-25).** `mssql-vss-backup-2phcr` — 7m 52s, ~17.85 GiB on `sa-nfs-cr-demo`. **Full handshake captured: 7× Event 3197 (freeze) + 7× Event 3198 (thaw) + 7× Event 18264 (DB backed up) + 2× VSS 8194.** *Originally misread as "missing thaw" because we searched for 18265 — 18265 is for transaction-log backups, NOT thaw. Corrected 2026-05-28 by manual `guest-fsfreeze-freeze/-thaw` cycle producing the identical event signature.* **VSS 8194 = optional `IVssWriterCallback` ACL miss on workgroup VMs — benign noise; SqlServerWriter doesn't depend on it.** Evidence: `output/vss-diagnostic-20260528.md`.
 - [x] **Restore test passed (2026-05-28).** `mssql-vss-backup-2phcr` → fresh ns `mssql-vss-restore` via `type: Location` Restore CR (`manifests/restore.yaml`). Wall time **7m 59s** — symmetric with backup #1's 7m 52s (data-transfer-bound). Restored VM Running, all 3 PVCs Bound clean, `MSSQL$MSSQLSERVER01` + `SQLWriter` Running, `demo_db` ONLINE, smoke-test row intact (exact timestamp match to original). Empirical app-consistency confirmed.
@@ -131,18 +137,18 @@ the Windows VM).
 - [ ] **Backup #2 under load** — once generator exists, re-run a backup with continuous writes; check whether torn data appears (real stress test of the 8194 path).
 - [x] **MVP-validation experiment 1 (2026-05-29): `demo_db` already in Full recovery model** (default with our SQL install). Baseline captured: `.mdf`/`.ldf` 8 MB each, `log_reuse_wait_desc=NOTHING`, 1 row in `dbo.writes`, 0 prior log backups in msdb.
 - [x] **MVP-validation experiment 2 (2026-05-29): SYSTEM-via-QGA-exec drives sqlcmd successfully.** `NT AUTHORITY\SYSTEM` was NOT in sysadmin by default — granted via `ALTER SERVER ROLE sysadmin ADD MEMBER [NT AUTHORITY\SYSTEM]`. `BACKUP LOG` via QGA-as-SYSTEM: 53 pages in 0.045s, file at `D:\SQLBackup\demo_db_exp2_via_qga_as_system.trn`. Customer-prod recommendation: dedicated SQL login with least-privilege, not SYSTEM-as-sysadmin.
-- [x] **MVP-validation experiment 3 (2026-05-29): `BACKUP LOG ... TO URL='s3://...'` works end-to-end.** AWS S3 bucket `mssql-vss-lab` (us-east-1) + SQL CREDENTIAL `s3://mssql-vss-lab.s3.us-east-1.amazonaws.com/lab` created. Driven via QGA-as-SYSTEM: 5 pages in 0.261s, validated via `RESTORE HEADERONLY` round-trip. Credentials in `collateral/aws-s3-bucket.txt` (rotate after lab work). Mechanism C + F primitive proven end-to-end.
+- [x] **MVP-validation experiment 3 (2026-05-29): `BACKUP LOG ... TO URL='s3://...'` works end-to-end.** AWS S3 bucket + SQL CREDENTIAL created (the lab S3 bucket; details in `CLAUDE.local.md`). Driven via QGA-as-SYSTEM: 5 pages in 0.261s, validated via `RESTORE HEADERONLY` round-trip. Credentials in `collateral/aws-s3-bucket.txt` (rotate after lab work). Mechanism C + F primitive proven end-to-end.
 - [x] **MVP-validation experiment 4 (2026-06-01): end-to-end log-replay restore via Path A — PASS.** Trilio backup `mssql-vss-backup-kcxdl` (7m31s / 19.7 GiB; same 7×3197/7×3198/7×18264/2×8194 signature as backup #1) + COPY_ONLY `.bak` anchor on D: (LastLSN `44000000136300001`) + post-anchor `BACKUP LOG TO URL` (FirstLSN `44000000119800001` → LastLSN `44000000140000001`) → cross-NS restore `mssql-vss-restore-exp4-xb295` (9m10s, ns `mssql-vss-restore-exp4`) → in-guest `RESTORE DATABASE WITH NORECOVERY, REPLACE` + `RESTORE LOG WITH RECOVERY` (~300ms combined) → final **16 rows** = 1 smoke + 10 pre-anchor + 5 post-anchor; post-anchor timestamps preserved (proves log replay, not crash-consistent rewind). Mechanism C end-to-end primitive proven. Evidence: `output/exp4-*` (8 files), manifests `manifests/restore-exp4*.yaml`. Restored VM/ns torn down post-validation.
 - [x] **Prep-doc naming fix (2026-06-12).** `docs/windows-vm-prep.md` § 3 now sets **explicit short VM/disk names** (VM `mssql`, disk `data`) instead of accepting the catalog's random `adjective-animal-NN` names. Root cause: some CSI backends (DRBD/LINSTOR observed on a lab cluster) derive an internal volume name from namespace + VM name + disk name + `drbd-` prefix + `-<random>` suffix, capped at **63 chars**; the auto-generated names overflowed it (`drbd-mssql-vss-lab-dv-win2k22-coffee-rat-79-disk-amaranth-turkey-13-a5vdrk`) and provisioning failed. Added length-cap callout + budget math (~34 chars for VM+disk after fixed overhead + namespace); renumbered § 3 steps; § 3a uses `VM=mssql` directly; fixed `§ 3.4`→`§ 3 step 5` cross-refs. **Backend is expected to handle long names natively later — treat as a hard constraint for now.** Open Q on rebuild: confirm the console doesn't append a random suffix to the add-on disk even when named `data`; if it does, switch to a YAML `dataVolumeTemplate`.
-- [ ] **Build own Win2k22 golden image from ISO/pipeline** — kills the 180-day eval clock (no more § 4f rearm dance) and lets sshd + QGA + virtio be baked in. When done, § 4e collapses to "sshd preinstalled — just upload your key" and § 4f disappears. **Bake-in checklist:** OpenSSH.Server capability (DISM healthy on fresh ISO build) + service Automatic + TCP/22 firewall rule + PowerShell DefaultShell; **delete `C:\ProgramData\ssh\ssh_host_*` before sysprep /generalize** (else all clones share host keys); do NOT bake `authorized_keys` into a shared image (key upload stays a per-clone step); **must still add virtio-win drivers + QEMU Guest Agent** (current golden image had QGA preinstalled — easy to forget, and QGA is load-bearing for the whole VSS lab). Hold prep-doc edits until image exists + bake confirmed. **Standalone bake-in brief: [`docs/golden-image-build.md`](docs/golden-image-build.md)** (created 2026-06-12). **⚠️ CORRECTED 2026-06-16: the "licensed edition kills the eval clock" premise was WRONG. The 10-day clock is the *activate-within-10-days* deadline; `slmgr /ato` (online activation) unlocks the full ~180-day eval — no licensed/VL ISO required. Per-clone activation is now baked into `docs/unattend.xml` Order 4. `docs/golden-image-build.md` still needs this correction.**
-- [x] **Golden-image build pipeline working on `ocp-dc3` (2026-06-15/16).** Used Red Hat `windows-efi-installer` Tekton pipeline (v4.21.0) in `vince-pipeline-i01` to build from ISO. **`win2k25` golden master built**: Server 2025 Standard **Desktop Experience** (build 26100.32230), **virtio + QGA + OpenSSH (GitHub-zip) baked**, unique per-clone host keys (host-key wipe before generalize). Validated on clone `golden-test-2k25`. Build answer file `windows2k25-autounattend-golden` (source in `collateral/win2k25-golden-*`). Key gotchas baked into knowledge: (a) `dism /Set-Edition` + sysprep = hang → never do edition conversion inline; (b) OpenSSH via GitHub-zip not Windows-Update FOD (egress); (c) edition selected via **`/IMAGE/INDEX`** not `/Image/Description` (refreshed ISO names drift); (d) **eval clock = activation, fixed by `slmgr /ato`**. A v2 **2022** golden configmap also exists (`collateral/configmap-win2k22-golden-v2.yaml`) but 2025 is the chosen lineage.
+- [ ] **Build own Win2k22 golden image from ISO/pipeline** — kills the 180-day eval clock (no more § 4f rearm dance) and lets sshd + QGA + virtio be baked in. When done, § 4e collapses to "sshd preinstalled — just upload your key" and § 4f disappears. **Bake-in checklist:** OpenSSH.Server capability (DISM healthy on fresh ISO build) + service Automatic + TCP/22 firewall rule + PowerShell DefaultShell; **delete `C:\ProgramData\ssh\ssh_host_*` before sysprep /generalize** (else all clones share host keys); do NOT bake `authorized_keys` into a shared image (key upload stays a per-clone step); **must still add virtio-win drivers + QEMU Guest Agent** (current golden image had QGA preinstalled — easy to forget, and QGA is load-bearing for the whole VSS lab). Hold prep-doc edits until image exists + bake confirmed. **Standalone bake-in brief: [`docs/golden-image-build.md`](docs/golden-image-build.md)** (created 2026-06-12). **⚠️ CORRECTED 2026-06-16: the "licensed edition kills the eval clock" premise was WRONG. The 10-day clock is the *activate-within-10-days* deadline; `slmgr /ato` (online activation) unlocks the full ~180-day eval — no licensed/VL ISO required. Per-clone activation is now baked into `docs/unattend.xml` Order 4. **`docs/golden-image-build.md` rewritten 2026-06-18 — now Server-2025-centric, eval-clock premise corrected (activation not licensed ISO), and includes the configmap + `windows-efi-installer` pipeline procedure.**
+- [x] **Golden-image build pipeline working on the build cluster (2026-06-15/16).** Used Red Hat `windows-efi-installer` Tekton pipeline (v4.21.0) in the build namespace to build from ISO. **`win2k25` golden master built**: Server 2025 Standard **Desktop Experience** (build 26100.32230), **virtio + QGA + OpenSSH (GitHub-zip) baked**, unique per-clone host keys (host-key wipe before generalize). Validated on clone `golden-test-2k25`. Build answer file `windows2k25-autounattend-golden` (source in `collateral/win2k25-golden-*`). Key gotchas baked into knowledge: (a) `dism /Set-Edition` + sysprep = hang → never do edition conversion inline; (b) OpenSSH via GitHub-zip not Windows-Update FOD (egress); (c) edition selected via **`/IMAGE/INDEX`** not `/Image/Description` (refreshed ISO names drift); (d) **eval clock = activation, fixed by `slmgr /ato`**. A v2 **2022** golden configmap also exists (`collateral/configmap-win2k22-golden-v2.yaml`) but 2025 is the chosen lineage.
 - [ ] **Distribute `win2k25` golden image to other clusters via containerDisk-in-a-registry.** Wrap disk as OCI containerDisk (disk at `/disk/`), push to a registry all clusters reach, consume as `containerDisk` volume. **Registry choice pending.** Prefer **in-cluster build** of the containerDisk (the Mac `virtctl vmexport download` is flaky on multi-GB pulls — ephemeral-port exhaustion).
 - [ ] **Bake parked `docs/windows-vm-prep.md` updates** (carried from 2026-05-25/28): (a) ODBC 18 self-signed cert workaround (`sqlcmd -C` / `TrustServerCertificate=yes`); (b) CD-detach + data-disk `Initialize-Disk` post-install §; (c) SQL default-path relocation via `xp_instance_regwrite`; (d) `type: Location` Restore CR pattern + cross-NS NodePort collision footnote + Routes-via-BackupPlan plan; (e) `micro` editor scp-from-Mac note; SSMS still deferred.
 - [ ] Bundle evidence in `output/` for the blog-writing agent (backup #1 packet copied 2026-05-25; restore-verification + FLR + load-test + MVP-validation packets still pending)
-- [ ] **Draft customer-facing technical response to Erick** — frame around the C+F MVP path (5-min RPO) with lab evidence citations + RPO/RTO positioning vs. crash-consistent baseline. Source material: `private-docs/research-tvk-mssql-vss-deep-dive.md`.
+- [ ] **Draft customer-facing technical response to the customer** — frame around the C+F MVP path (5-min RPO) with lab evidence citations + RPO/RTO positioning vs. crash-consistent baseline. Source material: `private-docs/research-tvk-mssql-vss-deep-dive.md`.
 - [x] Repo shipped (bootstrap step 13): **https://github.com/trilio-demo/mssql-with-vss** (public, 2026-05-24)
 - [x] **Lab guide published to public repo (2026-06-07).** `docs/lab-guide.md` — 12-step reproducible procedure with inline SQL + manifests + troubleshooting. Audience-widened (not just "Trilio colleagues"), scrubbed of internal taxonomy + competitive/roadmap framing. Internal-only companion docs (`flow.md`, `flow-prompt-claude-design.md`, `flow.pdf`) parked in `private-docs/`. `*.pdf` gitignored. Commit `a683311` on `origin/main`.
-- [x] **Shareable VM-build recipe shipped (2026-06-08).** `docs/unattend.xml` (new, heavily commented Sysprep answer file) + restructured `docs/windows-vm-prep.md` (cluster-agnostic; § 4e SSH install rewritten as 3 paths — `Add-WindowsCapability` / GitHub zip / RDP drag-and-drop). Commit `7dda088` on `origin/main`. Validated end-to-end by spinning a fresh VM on a *different* cluster (TopoLVM, not the original Portworx-on-`ocp-px`) — see Session State for the new lab footprint.
+- [x] **Shareable VM-build recipe shipped (2026-06-08).** `docs/unattend.xml` (new, heavily commented Sysprep answer file) + restructured `docs/windows-vm-prep.md` (cluster-agnostic; § 4e SSH install rewritten as 3 paths — `Add-WindowsCapability` / GitHub zip / RDP drag-and-drop). Commit `7dda088` on `origin/main`. Validated end-to-end by spinning a fresh VM on a *different* cluster (the TopoLVM consume cluster, not the original Portworx evidence cluster) — see Session State for the new lab footprint.
 - [ ] **Prototype Trilio hook into virt-launcher pod** — drive in-guest SQL flows (e.g. pre-backup `COPY_ONLY .bak`) automatically via QGA-exec lifecycle hooks. Closes the `[MANUAL]` gap that today's lab guide hands to the colleague.
 - [ ] **Prototype in-guest VSS component requestor** — A2 path / "Mechanism E." POC scope: hardcoded MSSQL + `SqlServerWriter`, single SQL/Windows version. Drive via QGA-exec first. **Deferred design Q:** can it work via QGA freeze/thaw alone (no QGA-exec)? If yes, hook + VSS tracks collapse into one.
 - [ ] **Demo POC to Trilio engineering** — handoff so engineering productionizes a multi-DB component requestor (VSS writer-GUID enumeration → Exchange, AD DS, etc.). Sales narrative: "one mechanism → n databases" vs. per-DB Explorer-style integrations.
@@ -151,129 +157,61 @@ the Windows VM).
 ---
 
 ## Session State
-*(Updated at end of each session — read at start of each new session.)*
 
-### Last session: 2026-06-17 (golden-image **distribution** proven end-to-end via ghcr containerDisk + DataImportCron; Win2k25 VM brought up on `openshifttsr1`; new `docs/win2k25-vm-prep.md`)
+*Forward-looking brief — read at start of each session. Backward-looking
+archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
+detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Still golden-image *infrastructure* work** across the build cluster `ocp-dc3` and a new consume/validate cluster **`openshifttsr1`** (`mssql-vss-lab` ns; LVMS/TopoLVM storage). The MSSQL-VSS POC on `ocp-px` was NOT touched.
+**Last session (2026-06-18):** Corrected a months-old misdiagnosis — the
+"GitHub CDN egress block" that drove SSH off the clone-time unattend was the
+**NIC MTU black-hole** all along (A/B proven: guest MTU 1500 → stall/timeout;
+1400 → fast). Locked two architecture decisions (keep SSH **baked**; keep the
+**GitHub-zip** install — both stay as-is). Added MTU insurance to the golden
+`post-install.ps1`; corrected/expanded the prep docs; rewrote
+`docs/golden-image-build.md` (Server-2025-centric + the configmap/pipeline
+procedure). Shipped + pushed as `7884580`. No POC/lab tracks moved — golden-image
+infra again.
 
-**Distribution — containerDisk → registry → catalog (PROVEN):**
-- Packaged the `win2k25` golden image as a **containerDisk**, pushed to **`ghcr.io/trilio-demo/win2k25-golden:2026-06-16`** (PRIVATE package). Built **in-cluster** on `ocp-dc3` via a buildah Job (mount `win2k25` PVC → `qemu-img convert` block→qcow2 → `FROM scratch` + `/disk/` → push). Gotchas: vfs driver duplicates the 7.8 GB layer (needed 60 Gi scratch PVC); a `http2` push drop (survived with `--retry`); the **Mac `virtctl vmexport download` is unreliable on multi-GB pulls** (ephemeral-port exhaustion) → in-cluster build is the right path.
-- Consumption proven on `openshifttsr1` two ways: one-shot `DataVolume source: registry:` import, and a **DataImportCron** → catalog boot source **`win2k25-trilio-golden`** (DISTINCT name; leaves the shared engineering `win2k25` DataSource alone). **Gotcha: the cron's registry digest-poll job runs in `openshift-cnv`** → the `ghcr-cdi` pull secret must exist there too, not just `openshift-virtualization-os-images`.
-- GHCR auth: **two least-privilege classic PATs** — write (build host → `ghcr-push` docker-registry secret) and read (consumers → `ghcr-cdi` CDI Opaque `accessKeyId`/`secretKey`). Env-var driven, no ansible (Vince declined it; [[feedback_keep_repo_lean_simple_secrets]]).
+**Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
+- **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
+  CREDENTIAL, `demo_db` 16 rows). *Don't touch unless rerunning experiments.*
+  State unverified since 2026-06-01; eval grace ended 2026-06-03.
+- **Consume/validate cluster (LVMS/TopoLVM)** — the consume SQL VM Running
+  (MTU 1400, activated to 12/14/2026, SSH via NodePort, **no SQL yet**); catalog
+  boot source `win2k25-trilio-golden` imports the golden image from the registry.
+- **Build cluster (Ceph RBD)** — golden-image BUILD cluster. `win2k25` DV = the
+  golden master; pipeline `windows-efi-installer` v4.21.0 in the build namespace.
 
-**Win2k25 VM bring-up on `openshifttsr1` — long debug, ALL guest-side fixes:**
-- Catalog defaulted to the **stale static `win2k25` DataSource** (no cron) → built the VM against the correct DV directly.
-- specialize parse-fail → "restarted unexpectedly" loop: clone-time `unattend.xml` carried a **WS2022 Datacenter GVLK** ProductKey, invalid on a 2025 Standard image → removed it (now edition/version-agnostic; activation handles licensing).
-- VM stuck `Init:0/3` (`FailedMapVolume … device does not exist`): the **`lvms-topolvm-immediate` (Immediate-binding) SC** → use **WFFC `lvms-topolvm`** for VM disks.
-- SSH dead: golden image's OpenSSH firewall rule was **Private-profile only**, but the KubeVirt masquerade net is classified **Public** → sshd answered on loopback but dropped all inbound; fix = broaden rule to **`-Profile Any`**. Also fixed `administrators_authorized_keys` ACL (SYSTEM+Administrators only, ASCII). Lab edge firewall passes only specific NodePorts → reused the open **32227** (repointed `mssql-lab-ssh` → win2k25-mssql).
-- Activation `0x80072EE2`: **MTU mismatch** (guest 1500 vs OVN overlay 1400; Windows ignores DHCP MTU) — NOT TLS-interception/egress (I misdiagnosed that first; the activation cert is genuine Microsoft). Set guest MTU 1400 → `slmgr /ato` succeeds → **180 days (expires 12/14/2026)**.
+**Open items (priority order):**
+1. **Rebake the `win2k25` golden image on the build cluster** to bake the firewall
+   `-Profile Any` fix + the new MTU insurance (the current registry image has
+   neither). Sync configmap `windows2k25-autounattend-golden` from
+   `docs/win2k25-golden-post-install.ps1` → run the pipeline → in-cluster buildah
+   repackage → push a new tag (consider a moving `:latest`) → bump the
+   DataImportCron `url:`. Then **drop the per-clone § 5c firewall step** from
+   `docs/win2k25-vm-prep.md`.
+2. **Install SQL Server** on the consume SQL VM if continuing lab work on
+   the consume cluster (§ 6 of prep doc); BackupPlan/Restore then need adapting
+   for the TopoLVM `VolumeSnapshotClass`.
+3. **MSSQL-VSS POC tracks (primary deliverable, still untouched)** — Trilio
+   virt-launcher hook (QGA-exec lifecycle); in-guest VSS component requestor
+   ("Mechanism E"; deferred Q: does it work via QGA freeze/thaw alone?); demo to
+   engineering.
+4. **Send the customer reply + internal status email** — drafts at
+   `private-docs/2026-06-01-*.md`, never sent.
+5. **Carried POC/evidence work:** Python write generator → backup #2 under load →
+   FLR demo → BackupPlan v2 (Routes + host-rewrite) → bundle `output/` for the
+   blog agent → Confluence article + blog. (Detail in § Project Status.)
 
-**Committed + pushed to `origin/main`:** `97ebbd9` (new `docs/win2k25-vm-prep.md` + version-agnostic unattend with MTU Order-4 before `/ato`), `9777cab` (golden recipe files moved `collateral/`→`docs/` + GHCR two-PAT/secret docs + `docs/ghcr-secret.example.yaml`), `05fa1e3` (two-namespace secret note). New tracked docs: `win2k25-vm-prep.md`, `win2k25-golden-{autounattend.xml,post-install.ps1,dataimportcron.yaml}`, `ghcr-secret.example.yaml`.
+**Continuity reminders:**
+- **Be deliberate about which cluster you touch** — three live footprints on
+  different storage backends; the evidence cluster is the protected env.
+- The last several sessions have all been golden-image infrastructure; the POC
+  tracks (item 3) are the real deliverable and keep getting deferred.
+- Real cluster/VM/customer identifiers live in the gitignored `CLAUDE.local.md`
+  (auto-loaded) + `docs/session-state.md` — refer to them here by role-label
+  only. Caveat: prior commits already exposed some identifiers in public git
+  history (scrubbing forward ≠ scrubbing the past).
 
-**Open items for next session (priority order):**
-1. **Rebake the golden image** to bake in the firewall `-Profile Any` fix (`collateral/`… now `docs/win2k25-golden-post-install.ps1` has it; the image currently in ghcr does NOT → firewall fix is a per-clone §5c step until rebake). On rebake also consider a moving **`:latest`** tag so the DataImportCron auto-refreshes.
-2. **Install SQL Server** on `win2k25-mssql` if continuing lab work on `openshifttsr1` (§6 of prep doc); then BackupPlan/Restore need adapting for TopoLVM `VolumeSnapshotClass`.
-3. **The actual MSSQL-VSS POC tracks are STILL untouched** — virt-launcher hook, in-guest VSS requestor, the unsent Erick reply (`private-docs/2026-06-01-*.md`). All recent sessions have been golden-image infra.
-
----
-
-### Previous session: 2026-06-15/16 (golden-image build pipeline on new `ocp-dc3` cluster; **eval-clock root cause = activation, not ISO**; Server 2025 Desktop golden image built + exported)
-
-**New cluster this session: `ocp-dc3`** (`api.ocp-dc3.demo.presales.trilio.io`), namespace `vince-pipeline-i01`. Used Red Hat's `windows-efi-installer` Tekton pipeline (catalog `redhat-pipelines`, v4.21.0) to build Windows golden images from ISO. **This was golden-image *infrastructure* work — the MSSQL-VSS lab on `ocp-px` was NOT touched.**
-
-**Accomplished / discovered:**
-- **Decoded the OCP golden-image build flow:** `collateral/configmap-win2k22-only-with-sshd.yaml` is the *build* answer file (windowsPE install → audit-mode `post-install.ps1` [virtio + QGA] → `sysprep /generalize` → capture as base DV). `docs/unattend.xml` is the *clone-time* answer file. Despite the `-sshd` filename it bakes **no SSH**, and it installs **Datacenter *Eval*** build `20348.587` (May-2021 RTM).
-- **Built v2 2022 golden configmap** `collateral/configmap-win2k22-golden-v2.yaml` (virtio + QGA + **OpenSSH via GitHub-zip** + host-key wipe). Two build-breakers learned the hard way: (1) `dism /Set-Edition` + sysprep = **hang** — Set-Edition stages a pending-reboot and `sysprep /generalize` refuses (hr=0x8007139f), VM never powers off, `wait-for-vmi-status` hangs → removed it; (2) `Add-WindowsCapability` OpenSSH needs Windows-Update FOD which `ocp-dc3` blocks → switched to **GitHub-zip download** (proven reachable from an egress-test pod). v2 built + validated (sshd Running/Automatic, unique per-clone host keys via the wipe).
-- **🔑 ROOT CAUSE of the "10-day eval" mystery: UNACTIVATED eval — not stale ISO / OS version / maintenance date.** Ruled out, in order: stale `20348.587` ISO (the *original stock* script reproduced 10 days too → not our edits); OS version; Oct-2026 mainstream-support cap (refuted — expiry *rolls* with install date = install+10, not a fixed calendar date); `slmgr /rearm` (burns a rearm, doesn't move expiry). **Definitive:** a freshly generalized eval clone boots into "Initial grace period" = the *activate-within-10-days* deadline. **`slmgr /ato` (online activation — WORKS from `ocp-dc3`) flips it to the full ~180-day timed eval** (2025 clone: 10 days → expires 12/13/2026). The pre-existing 2025 VM showed ~180 only because it had long since activated.
-- **Pivoted to Server 2025 Desktop golden image** (2025 ISO is current/clean; the activation fix is universal). Built `win2k25` DV via new configmap `windows2k25-autounattend-golden` (= proven stock 2025 recipe + GitHub-zip SSH + host-key wipe). **Fixed a refreshed-ISO image-picker hang** (Setup couldn't match `/Image/Description="...SERVERSTANDARDDESKTOP"` — MS updated the 2025 eval ISO since the 55-day-old `d24w7` build) by switching to **`/IMAGE/INDEX=2`** (Standard, Desktop Experience). Caught fast via `virtctl vnc screenshot`. Validated clone `golden-test-2k25`: build **26100.32230**, **Desktop Experience**, QGA + sshd (unique keys), **180 days after `/ato`**.
-- **Added `slmgr /ato` as Order 4** in `docs/unattend.xml` `FirstLogonCommands` so clones auto-activate to 180 on first boot (**uncommitted**).
-- **Exported `win2k25`** golden image → `~/golden-images/win2k25-golden.img.gz` (+ `win2k22-golden.img.gz` 4.3 GB from the v2 build) on Vince's Mac, via `virtctl vmexport`.
-
-**Next session — distribute the golden image + cleanup:**
-1. **Distribute `win2k25` via containerDisk-in-a-registry** (chosen method): wrap the disk as an OCI containerDisk (buildah/podman, disk at `/disk/`), push to a registry all clusters reach, consume as a `containerDisk` volume. **DECISION PENDING: which registry** (quay.io / ghcr.io `trilio-demo`? internal?).
-2. **Commit `docs/unattend.xml`** Order-4 activation change.
-3. **Cleanup `ocp-dc3`:** delete `golden-test`, `golden-test-2k25`, `win2k25-export`; `win2k22-v0`/`win2k25-v0` are Vince's (leave).
-4. **Carried:** the whole MSSQL-VSS POC track on `ocp-px` (virt-launcher hook + in-guest VSS requestor, Erick reply, etc.) is untouched and still pending.
-
----
-
-### Earlier (full detail): 2026-06-12 (prep-doc naming fix shipped; ISO golden-image build queued)
-
-**Accomplished:**
-- Diagnosed a provisioning failure on a **DRBD/LINSTOR-backed** lab cluster: the backend derives an internal volume name from namespace + VM name + disk name + `drbd-` prefix + random suffix, capped at **63 chars**. The catalog's random `adjective-animal-NN` VM/disk names overflowed it (`drbd-mssql-vss-lab-dv-win2k22-coffee-rat-79-disk-amaranth-turkey-13-a5vdrk`, ~74 chars). Confirmed it **can't be renamed in place** (k8s object names immutable; the DRBD resource name follows the PVC) — fix is recreate with short names.
-- Fixed `docs/windows-vm-prep.md` § 3: explicit short VM name (`mssql`) + disk name (`data`), length-cap callout + budget math (~34 chars for VM+disk after fixed overhead + namespace), renumbered steps, § 3a uses `VM=mssql`, fixed `§ 3.4`→`§ 3 step 5` cross-refs.
-- Wrote new `docs/golden-image-build.md` — bake-in brief for building a Win2k22 golden image from ISO.
-- Committed + pushed **`4fe7255`** on `origin/main`.
-
-**Durable lab state changes:** None — Mac-side documentation only; no cluster resources touched today.
-
-**Next session: likely week of 2026-06-15.** Vince is building the new ISO golden image offline between sessions.
-
-**Open items for next session (priority order):**
-1. **Build new Win2k22 golden image from ISO** (Vince doing offline) — follow `docs/golden-image-build.md`: licensed edition (kills the 180-day eval clock), bake virtio + QGA + OpenSSH, **delete SSH host keys before sysprep /generalize**, don't bake `authorized_keys`. On return: verify a test clone, then collapse prep-doc § 4e/§ 4f around the preinstalled services.
-2. **Recreate the failed VM with short names** (`mssql` / `data`) once the image exists. On rebuild, confirm the OCP console doesn't append a random suffix to the add-on `data` disk; if it does, switch to a YAML `dataVolumeTemplate`.
-3. **Everything in the 2026-06-08 open-items list below still applies** — POC tracks (hook + in-guest VSS requestor), the two-footprint cluster cautions (TopoLVM Trilio-operator check / `ocp-px` state verify), and the unsent internal email + Erick reply.
-
----
-
-### Earlier (full detail): 2026-06-08 (shareable VM-build recipe shipped; new POC cluster online)
-
-**Accomplished:**
-- Resumed after an AUP-alert force-exit. Diagnosed the previous-session new-VM build failures: (a) CD-letter race blocked Order 1 data-disk init (D: held by `virtio-win` CD-ROM when `New-Partition -DriveLetter D` ran), (b) the DISM servicing stack on the golden image is broken — `Add-WindowsCapability OpenSSH.Server` returned `Installed` but binaries never deployed; `dism /Set-Edition` silently no-op'd.
-- **Rebuilt VM on a different cluster** (`lvms-topolvm-immediate` TopoLVM, NOT `ocp-px` Portworx) — Vince was reusing the procedure on a fresh cluster to validate the shareable-recipe goal. New VM: `mssql-vss-lab/win2k22-coffee-rat-79`.
-- First unattend revision (6 FirstLogonCommands incl. Orders 4-6 for GitHub-zip OpenSSH install): Orders 1-3 fired (D: formatted NTFS DATA, RDP enabled, DISM-broken edition fallback no-op'd) but **Orders 4-6 NEVER FIRED** — chain halted between Order 3 and Order 4 with no diagnostic surface. Compounding issue: cluster's egress allows `api.github.com` but blocks `objects.githubusercontent.com` (the release-download CDN), so even the GitHub-download approach was fragile from network alone.
-- Workaround for *this* VM: RDP drag-and-drop of `OpenSSH-Win64.zip` from Mac → manual extract + `install-sshd.ps1` → SSH up. NodePort `mssql-lab-ssh` exposes port 22; SSH'd in from Mac with key.
-- **Refactor for portability:** stripped Orders 4-6 from `docs/unattend.xml`; restructured `docs/windows-vm-prep.md` § 4e as a 3-path manual install (`Add-WindowsCapability` / GitHub zip / RDP drag-and-drop) so readers pick by their cluster's egress posture. Genericized prep doc — variables for storage class, IPs, IMG_PATH; no hardcoded `ocp-px`/`px-csi-replicated`. Tilde-expansion removed from doc command examples (`$HOME` / absolute paths). Moved `cscript //nologo //h:cscript //s` from a callout to an inline required step in § 4f.
-- Memories added: `project_shareable_recipe.md`, `feedback_no_tilde_in_doc_paths.md`.
-- Committed and pushed: **`7dda088`** on `origin/main` — "docs: ship shareable unattend.xml + restructure prep guide."
-
-**Durable lab state changes:**
-- **NEW cluster + new VM online:** `mssql-vss-lab/win2k22-coffee-rat-79` on a TopoLVM-backed OpenShift cluster (NOT `ocp-px`). D: formatted NTFS DATA (40 GiB), QGA Running, RDP + SSH both reachable. **SQL Server NOT yet installed** on this VM — § 6 of the prep doc is the next step if you continue lab work here.
-- Old broken VM `win2k22-cyan-lungfish-79` deleted (cleanup commands applied in `mssql-vss-lab` on the new cluster).
-- **Original `ocp-px` lab footprint untouched** today. `mssql-vss-lab/win2k22-aqua-junglefowl-90` + `mssql-vss-restore/win2k22-aqua-junglefowl-90` still as they were on 2026-06-01. Eval grace passed 2026-06-03; state unverified.
-
-**Two parallel lab footprints now exist** — be deliberate about which you're touching:
-- **`ocp-px` (Portworx):** authoritative Exp 4 evidence environment. Original BackupPlan, SQL CREDENTIAL, demo_db with 16 rows all live here. Don't touch unless rerunning experiments there.
-- **New TopoLVM cluster:** recipe-validation environment. Used to prove the shareable unattend works elsewhere. No BackupPlan / SQL install yet. Trilio operator install status here is unverified.
-
-**Open items for next session (priority order):**
-1. **POC tracks queued from 2026-06-07 still primary** — Trilio hook into virt-launcher pod; in-guest VSS component requestor; deferred design Q (does VSS requestor work via QGA freeze/thaw alone). Today's shareable-recipe work was a sidequest; these tracks didn't move.
-2. **If continuing lab work on the new TopoLVM cluster:** confirm Trilio operator is installed there first; install SQL Server on `win2k22-coffee-rat-79` (§ 6 of prep doc); then BackupPlan + Restore CR will need adapting for TopoLVM's `VolumeSnapshotClass` (not Portworx). Storage-class differences ripple into BackupPlan/Restore behavior — worth a thinking pass before deep work.
-3. **If returning to `ocp-px`:** verify state of original VMs (eval grace ended 2026-06-03, 5+ days past; 3 rearms remain).
-4. **Send internal status email + Erick reply** — drafts still at `private-docs/2026-06-01-*.md`, not sent.
-5. (Items 6-10 from the 2026-06-07 next-session list still apply: Python generator, backup #2 under load, FLR, BackupPlan v2, parked prep-doc updates, Confluence article + blog.)
-
----
-
-### Earlier sessions
-*2026-06-07 (lab guide `docs/lab-guide.md` shipped to public repo as `a683311` — 12-step reproducible procedure, scrubbed of internal taxonomy/competitive/roadmap framing; internal companions parked in `private-docs/`; new POC tracks scoped — Trilio virt-launcher hook + in-guest VSS component requestor + deferred QGA-freeze/thaw design Q), 2026-06-03 (S3 cred-leak audit clean — no `AKIA`/`ASIA` or aws key strings in any tracked file or commit; secrets live only in `collateral/aws-s3-bucket.txt` on Vince's Mac + SQL CREDENTIAL in master), 2026-06-01 (Exp 4 PASS — full Path A end-to-end log-replay restore validated: backup `mssql-vss-backup-kcxdl` 7m31s/19.7 GiB + `COPY_ONLY .bak` anchor on D: + post-anchor `BACKUP LOG TO URL` → cross-NS restore 9m10s → in-guest `RESTORE DB WITH NORECOVERY` + `RESTORE LOG WITH RECOVERY` ~300ms → final 16 rows = 1 smoke + 10 pre-anchor + 5 post-anchor; post-anchor timestamps preserved. Email drafts staged at `private-docs/2026-06-01-*.md`, not yet sent.), 2026-05-29 (MVP-validation Exp 1-3: Full recovery already set, QGA-as-SYSTEM drives sqlcmd with SYSTEM granted sysadmin, `BACKUP LOG TO URL='s3://...'` round-trip validated — durable artifacts: SYSTEM-sysadmin on `MSSQLSERVER01`, SQL CREDENTIAL in master, AWS keys in `collateral/aws-s3-bucket.txt`), 2026-05-28 (cross-NS restore validated + QGA/VSS diagnostic — `mssql-vss-backup-2phcr` → `mssql-vss-restore`, 7m 59s, freeze/thaw IDs corrected to 3197/3198), 2026-05-25 (data disk online as D: + SQL paths relocated + backup #1 `mssql-vss-backup-2phcr` at 7m 52s / 17.85 GiB), bootstrap (2026-05-06) → VM stand-up (2026-05-07/08). Durable facts live in **Project Status**; journey is in `git log` and `output/` artifacts.*
-
-**Persistent lab state on `ocp-px` (current as of 2026-06-01; not re-verified since — re-check before next deep work there):**
-- Context: `mssql-vss-lab/api-ocp-px-demo-presales-trilio-io:6443/kube:admin`.
-- `mssql-vss-lab/win2k22-aqua-junglefowl-90` — last known Running on `worker-0-frqj5`. `demo_db` ONLINE (16 rows), Full recovery, SYSTEM sysadmin, S3 credential live. **Eval clock past 2026-06-03 grace; verify state.**
-- `mssql-vss-restore/win2k22-aqua-junglefowl-90` — still Running from 2026-05-28 restore test (untouched).
-- Reach original VM: `ssh -i ~/.ssh/vbky-temp-key.pem -p 31256 administrator@172.31.1.56`.
-- QGA-driven exec pattern: `virsh qemu-agent-command <vm> '{"execute":"guest-exec",...}'` via `oc exec` into virt-launcher pod, or directly on worker.
-- S3: `s3://mssql-vss-lab/lab/` (us-east-1); creds in `collateral/aws-s3-bucket.txt`.
-
-**Persistent lab state on the new TopoLVM cluster (as of 2026-06-08):**
-- `mssql-vss-lab/win2k22-coffee-rat-79` — Running. D: NTFS DATA 40 GiB, QGA Running, sshd Running (binaries at `C:\Program Files\OpenSSH\`, manually installed via § 4e Path C). RDP + SSH NodePorts via `mssql-lab-rdp` / `mssql-lab-ssh`. **Edition: still Eval (DISM broken; initial grace started 2026-06-08 — verify expiry).** SQL Server NOT installed. No Trilio resources here yet.
-- NOTE: this "TopoLVM cluster" is **`openshifttsr1`** — same cluster as the 2026-06-17 block below. `win2k22-coffee-rat-79` lost SSH on NodePort 32227 when it was repointed to `win2k25-mssql` (2026-06-17); reach it via console or RDP `31880`.
-
-**Persistent lab state on `openshifttsr1` (consume/validate cluster; as of 2026-06-17):**
-- Context: `mssql-vss-lab/api-openshifttsr1-prod-engineering-trilio-io:6443/kube:admin`. Storage: **LVMS/TopoLVM** — `lvms-topolvm` (WFFC; **use this for VM disks**) and `lvms-topolvm-immediate` (Immediate; the default, causes the `Init:0/3` device race for multi-disk VMs). Lab **edge firewall passes only specific NodePorts** (32227 confirmed open). Node IP `172.21.0.32`.
-- **`mssql-vss-lab/win2k25-mssql`** — Running, from the new golden image (root cloned from `openshift-virtualization-os-images/win2k25`). Desktop Experience, QGA, **sshd key-auth via NodePort 32227** (`mssql-lab-ssh`, repointed to this VM), guest **MTU set to 1400**, **activated → 180 days (expires 12/14/2026)**. SQL Server NOT installed.
-- **Catalog boot source `win2k25-trilio-golden`** (DataImportCron in `openshift-virtualization-os-images`) — Ready, imports `ghcr.io/trilio-demo/win2k25-golden:2026-06-16`. `ghcr-cdi` pull secret exists in **both** `openshift-virtualization-os-images` and `openshift-cnv`.
-- Leftover from validation (deletable): `win2k25-fromreg` DV (one-shot import test).
-
-**Persistent lab state on `ocp-dc3` (golden-image BUILD cluster; as of 2026-06-17):**
-- Context: `vince-pipeline-i01/api-ocp-dc3-demo-presales-trilio-io:6443/kube:admin`. Storage: ODF Ceph RBD (`ocs-storagecluster-ceph-rbd-virtualization`, default; Block/RWX; supports CSI smart-clone, so DV→VM clones are instant CoW).
-- **`win2k25` DV = the golden master:** Server 2025 Standard **Desktop Experience**, build 26100.32230, **virtio + QGA + OpenSSH** baked, **generalized/unactivated** (correct — clones self-activate via `docs/unattend.xml` Order 4). Pristine; **exported as the ghcr containerDisk `ghcr.io/trilio-demo/win2k25-golden:2026-06-16`** (the distribution artifact all other clusters pull).
-- ⚠️ That ghcr image does NOT yet have the firewall `-Profile Any` fix baked (the `docs/win2k25-golden-post-install.ps1` source DOES) → **rebake needed** so cloned SSH works without the per-clone §5c firewall step.
-- `win2k22` DV = last built by the *original stock* `windows2k22-autounattend` script (the control test); the v2 2022 image was overwritten by it.
-- Configmaps (build answer files): `windows2k22-autounattend-golden-v2`, `windows2k25-autounattend-golden`. **Sources saved in `collateral/`**: `configmap-win2k22-golden-v2.yaml`, `win2k25-golden-autounattend.xml`, `win2k25-golden-post-install.ps1` (collateral is gitignored).
-- Running VMs (cleanup pending unless noted): `golden-test` (2022 v2 clone), `golden-test-2k25` (2025 clone, **activated → expires 12/13/2026**), `win2k22-v0` + `win2k25-v0` (**Vince's** activation-test VMs — leave).
-- Build pipeline: `windows-efi-installer` v4.21.0 (`redhat-pipelines` hub resolver), 2h timeout. **Stuck `wait-for-vmi-status` clears by force-deleting the `virt-launcher` pod** (`oc delete pod -l vm.kubevirt.io/name=<vm> --grace-period=0 --force`) → VMI finalizers release.
-- Golden images exported to Vince's Mac: `~/golden-images/win2k22-golden.img.gz` (4.3 GB, complete) and `~/golden-images/win2k25-golden.img.gz` (**flaky — `virtctl vmexport download` keeps hitting macOS ephemeral-port exhaustion mid-transfer; prefer in-cluster containerDisk build instead**).
-- Activation: `slmgr /ato` succeeds from this cluster and flips eval 10d → ~180d. Egress to Windows-Update FOD (`fe2.update.microsoft.com`) is blocked, but the licensing/activation endpoint is reachable; `github.com` + release CDN reachable (used for the SSH bake).
+Full archaeology: `docs/session-state.md` — consult when prior-thread depth,
+decision reasoning, or ruled-out paths are needed.

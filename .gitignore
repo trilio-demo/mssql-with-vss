@@ -51,3 +51,6 @@ TODO.md
 *-conversation.md
 CLAUDE.local.md
 learnings.md
+# Session-state archaeology (companion to CLAUDE.md's forward-looking brief);
+# holds internal cluster identifiers, IPs, reach commands — local-only
+docs/session-state.md
