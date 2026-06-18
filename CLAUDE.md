@@ -153,7 +153,32 @@ the Windows VM).
 ## Session State
 *(Updated at end of each session — read at start of each new session.)*
 
-### Last session: 2026-06-15/16 (golden-image build pipeline on new `ocp-dc3` cluster; **eval-clock root cause = activation, not ISO**; Server 2025 Desktop golden image built + exported)
+### Last session: 2026-06-17 (golden-image **distribution** proven end-to-end via ghcr containerDisk + DataImportCron; Win2k25 VM brought up on `openshifttsr1`; new `docs/win2k25-vm-prep.md`)
+
+**Still golden-image *infrastructure* work** across the build cluster `ocp-dc3` and a new consume/validate cluster **`openshifttsr1`** (`mssql-vss-lab` ns; LVMS/TopoLVM storage). The MSSQL-VSS POC on `ocp-px` was NOT touched.
+
+**Distribution — containerDisk → registry → catalog (PROVEN):**
+- Packaged the `win2k25` golden image as a **containerDisk**, pushed to **`ghcr.io/trilio-demo/win2k25-golden:2026-06-16`** (PRIVATE package). Built **in-cluster** on `ocp-dc3` via a buildah Job (mount `win2k25` PVC → `qemu-img convert` block→qcow2 → `FROM scratch` + `/disk/` → push). Gotchas: vfs driver duplicates the 7.8 GB layer (needed 60 Gi scratch PVC); a `http2` push drop (survived with `--retry`); the **Mac `virtctl vmexport download` is unreliable on multi-GB pulls** (ephemeral-port exhaustion) → in-cluster build is the right path.
+- Consumption proven on `openshifttsr1` two ways: one-shot `DataVolume source: registry:` import, and a **DataImportCron** → catalog boot source **`win2k25-trilio-golden`** (DISTINCT name; leaves the shared engineering `win2k25` DataSource alone). **Gotcha: the cron's registry digest-poll job runs in `openshift-cnv`** → the `ghcr-cdi` pull secret must exist there too, not just `openshift-virtualization-os-images`.
+- GHCR auth: **two least-privilege classic PATs** — write (build host → `ghcr-push` docker-registry secret) and read (consumers → `ghcr-cdi` CDI Opaque `accessKeyId`/`secretKey`). Env-var driven, no ansible (Vince declined it; [[feedback_keep_repo_lean_simple_secrets]]).
+
+**Win2k25 VM bring-up on `openshifttsr1` — long debug, ALL guest-side fixes:**
+- Catalog defaulted to the **stale static `win2k25` DataSource** (no cron) → built the VM against the correct DV directly.
+- specialize parse-fail → "restarted unexpectedly" loop: clone-time `unattend.xml` carried a **WS2022 Datacenter GVLK** ProductKey, invalid on a 2025 Standard image → removed it (now edition/version-agnostic; activation handles licensing).
+- VM stuck `Init:0/3` (`FailedMapVolume … device does not exist`): the **`lvms-topolvm-immediate` (Immediate-binding) SC** → use **WFFC `lvms-topolvm`** for VM disks.
+- SSH dead: golden image's OpenSSH firewall rule was **Private-profile only**, but the KubeVirt masquerade net is classified **Public** → sshd answered on loopback but dropped all inbound; fix = broaden rule to **`-Profile Any`**. Also fixed `administrators_authorized_keys` ACL (SYSTEM+Administrators only, ASCII). Lab edge firewall passes only specific NodePorts → reused the open **32227** (repointed `mssql-lab-ssh` → win2k25-mssql).
+- Activation `0x80072EE2`: **MTU mismatch** (guest 1500 vs OVN overlay 1400; Windows ignores DHCP MTU) — NOT TLS-interception/egress (I misdiagnosed that first; the activation cert is genuine Microsoft). Set guest MTU 1400 → `slmgr /ato` succeeds → **180 days (expires 12/14/2026)**.
+
+**Committed + pushed to `origin/main`:** `97ebbd9` (new `docs/win2k25-vm-prep.md` + version-agnostic unattend with MTU Order-4 before `/ato`), `9777cab` (golden recipe files moved `collateral/`→`docs/` + GHCR two-PAT/secret docs + `docs/ghcr-secret.example.yaml`), `05fa1e3` (two-namespace secret note). New tracked docs: `win2k25-vm-prep.md`, `win2k25-golden-{autounattend.xml,post-install.ps1,dataimportcron.yaml}`, `ghcr-secret.example.yaml`.
+
+**Open items for next session (priority order):**
+1. **Rebake the golden image** to bake in the firewall `-Profile Any` fix (`collateral/`… now `docs/win2k25-golden-post-install.ps1` has it; the image currently in ghcr does NOT → firewall fix is a per-clone §5c step until rebake). On rebake also consider a moving **`:latest`** tag so the DataImportCron auto-refreshes.
+2. **Install SQL Server** on `win2k25-mssql` if continuing lab work on `openshifttsr1` (§6 of prep doc); then BackupPlan/Restore need adapting for TopoLVM `VolumeSnapshotClass`.
+3. **The actual MSSQL-VSS POC tracks are STILL untouched** — virt-launcher hook, in-guest VSS requestor, the unsent Erick reply (`private-docs/2026-06-01-*.md`). All recent sessions have been golden-image infra.
+
+---
+
+### Previous session: 2026-06-15/16 (golden-image build pipeline on new `ocp-dc3` cluster; **eval-clock root cause = activation, not ISO**; Server 2025 Desktop golden image built + exported)
 
 **New cluster this session: `ocp-dc3`** (`api.ocp-dc3.demo.presales.trilio.io`), namespace `vince-pipeline-i01`. Used Red Hat's `windows-efi-installer` Tekton pipeline (catalog `redhat-pipelines`, v4.21.0) to build Windows golden images from ISO. **This was golden-image *infrastructure* work — the MSSQL-VSS lab on `ocp-px` was NOT touched.**
 
@@ -173,7 +198,7 @@ the Windows VM).
 
 ---
 
-### Previous session: 2026-06-12 (prep-doc naming fix shipped; ISO golden-image build queued)
+### Earlier (full detail): 2026-06-12 (prep-doc naming fix shipped; ISO golden-image build queued)
 
 **Accomplished:**
 - Diagnosed a provisioning failure on a **DRBD/LINSTOR-backed** lab cluster: the backend derives an internal volume name from namespace + VM name + disk name + `drbd-` prefix + random suffix, capped at **63 chars**. The catalog's random `adjective-animal-NN` VM/disk names overflowed it (`drbd-mssql-vss-lab-dv-win2k22-coffee-rat-79-disk-amaranth-turkey-13-a5vdrk`, ~74 chars). Confirmed it **can't be renamed in place** (k8s object names immutable; the DRBD resource name follows the PVC) — fix is recreate with short names.
@@ -234,10 +259,18 @@ the Windows VM).
 
 **Persistent lab state on the new TopoLVM cluster (as of 2026-06-08):**
 - `mssql-vss-lab/win2k22-coffee-rat-79` — Running. D: NTFS DATA 40 GiB, QGA Running, sshd Running (binaries at `C:\Program Files\OpenSSH\`, manually installed via § 4e Path C). RDP + SSH NodePorts via `mssql-lab-rdp` / `mssql-lab-ssh`. **Edition: still Eval (DISM broken; initial grace started 2026-06-08 — verify expiry).** SQL Server NOT installed. No Trilio resources here yet.
+- NOTE: this "TopoLVM cluster" is **`openshifttsr1`** — same cluster as the 2026-06-17 block below. `win2k22-coffee-rat-79` lost SSH on NodePort 32227 when it was repointed to `win2k25-mssql` (2026-06-17); reach it via console or RDP `31880`.
 
-**Persistent lab state on `ocp-dc3` (golden-image BUILD cluster; as of 2026-06-16):**
+**Persistent lab state on `openshifttsr1` (consume/validate cluster; as of 2026-06-17):**
+- Context: `mssql-vss-lab/api-openshifttsr1-prod-engineering-trilio-io:6443/kube:admin`. Storage: **LVMS/TopoLVM** — `lvms-topolvm` (WFFC; **use this for VM disks**) and `lvms-topolvm-immediate` (Immediate; the default, causes the `Init:0/3` device race for multi-disk VMs). Lab **edge firewall passes only specific NodePorts** (32227 confirmed open). Node IP `172.21.0.32`.
+- **`mssql-vss-lab/win2k25-mssql`** — Running, from the new golden image (root cloned from `openshift-virtualization-os-images/win2k25`). Desktop Experience, QGA, **sshd key-auth via NodePort 32227** (`mssql-lab-ssh`, repointed to this VM), guest **MTU set to 1400**, **activated → 180 days (expires 12/14/2026)**. SQL Server NOT installed.
+- **Catalog boot source `win2k25-trilio-golden`** (DataImportCron in `openshift-virtualization-os-images`) — Ready, imports `ghcr.io/trilio-demo/win2k25-golden:2026-06-16`. `ghcr-cdi` pull secret exists in **both** `openshift-virtualization-os-images` and `openshift-cnv`.
+- Leftover from validation (deletable): `win2k25-fromreg` DV (one-shot import test).
+
+**Persistent lab state on `ocp-dc3` (golden-image BUILD cluster; as of 2026-06-17):**
 - Context: `vince-pipeline-i01/api-ocp-dc3-demo-presales-trilio-io:6443/kube:admin`. Storage: ODF Ceph RBD (`ocs-storagecluster-ceph-rbd-virtualization`, default; Block/RWX; supports CSI smart-clone, so DV→VM clones are instant CoW).
-- **`win2k25` DV = the golden master:** Server 2025 Standard **Desktop Experience**, build 26100.32230, **virtio + QGA + OpenSSH** baked, **generalized/unactivated** (correct — clones self-activate via `docs/unattend.xml` Order 4). Pristine (never booted).
+- **`win2k25` DV = the golden master:** Server 2025 Standard **Desktop Experience**, build 26100.32230, **virtio + QGA + OpenSSH** baked, **generalized/unactivated** (correct — clones self-activate via `docs/unattend.xml` Order 4). Pristine; **exported as the ghcr containerDisk `ghcr.io/trilio-demo/win2k25-golden:2026-06-16`** (the distribution artifact all other clusters pull).
+- ⚠️ That ghcr image does NOT yet have the firewall `-Profile Any` fix baked (the `docs/win2k25-golden-post-install.ps1` source DOES) → **rebake needed** so cloned SSH works without the per-clone §5c firewall step.
 - `win2k22` DV = last built by the *original stock* `windows2k22-autounattend` script (the control test); the v2 2022 image was overwritten by it.
 - Configmaps (build answer files): `windows2k22-autounattend-golden-v2`, `windows2k25-autounattend-golden`. **Sources saved in `collateral/`**: `configmap-win2k22-golden-v2.yaml`, `win2k25-golden-autounattend.xml`, `win2k25-golden-post-install.ps1` (collateral is gitignored).
 - Running VMs (cleanup pending unless noted): `golden-test` (2022 v2 clone), `golden-test-2k25` (2025 clone, **activated → expires 12/13/2026**), `win2k22-v0` + `win2k25-v0` (**Vince's** activation-test VMs — leave).
