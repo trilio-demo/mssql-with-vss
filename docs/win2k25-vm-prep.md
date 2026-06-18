@@ -53,8 +53,11 @@ oc create secret generic ghcr-cdi -n $NS \
   --from-literal=accessKeyId="$GHCR_USER" --from-literal=secretKey="$GHCR_READ_PAT"
 ```
 
-> Apply it in **every namespace that pulls** the image — including
-> `openshift-virtualization-os-images` if you use the DataImportCron (§ 2b).
+> Apply it in **every namespace that pulls** the image. The DataImportCron
+> (§ 2b) needs it in **two** places: `openshift-virtualization-os-images` (for
+> the import DataVolume) **and** the CDI namespace **`openshift-cnv`** — the
+> cron's registry digest-poll job runs there, and without the secret it fails
+> with `CreateContainerConfigError: secret "ghcr-cdi" not found`.
 
 ### 1c. Push secret (`ghcr-push`) — build host only
 

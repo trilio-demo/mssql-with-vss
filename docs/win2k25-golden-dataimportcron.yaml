@@ -11,10 +11,12 @@
 # cluster's "win2k25" DataSource is a STATIC PVC (no cron), the template keeps
 # cloning that old image regardless of what you upload — hence a distinct cron.
 #
-# Prereqs:
-#   - ghcr-cdi secret (keys: accessKeyId, secretKey) in
-#     openshift-virtualization-os-images  [private-package pull creds; see
-#     win2k25-vm-prep.md § 1]
+# Prereqs — the ghcr-cdi pull secret (keys: accessKeyId, secretKey) must exist
+# in BOTH namespaces (see win2k25-vm-prep.md § 1):
+#   - openshift-virtualization-os-images  -> used by the import DataVolume
+#   - openshift-cnv (the CDI namespace)    -> used by this cron's registry
+#       digest-poll job; if missing, the poll job fails with
+#       CreateContainerConfigError: secret "ghcr-cdi" not found
 #
 # Result: a NEW DataSource "win2k25-trilio-golden". Create a VM from it (or
 # clone it); docs/unattend.xml then personalizes on first boot — including the
