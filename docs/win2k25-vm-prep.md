@@ -106,6 +106,10 @@ EOF
 > `FailedMapVolume ... special device /dev/topolvm/<uuid> does not exist`.
 > WFFC provisions at pod-schedule time and avoids this. Check your SCs:
 > `oc get sc -o custom-columns=NAME:.metadata.name,BINDING:.volumeBindingMode`.
+>
+> *This race only bites **multi-node** node-local clusters (volume on node A,
+> pod on node B). On a **single-node** cluster it can't happen — but use the
+> WFFC SC anyway; it's the safe default and harmless when there's one node.*
 
 ### 2b. (Optional) Catalog boot source via DataImportCron
 
