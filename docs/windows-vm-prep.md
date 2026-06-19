@@ -154,15 +154,23 @@ In the OCP Console:
    propagates into the boot-disk and any add-on-disk volume names, so keeping
    it short here is what keeps the backend's derived name under 63 chars.
 3. **Project / Namespace:** `mssql-vss-lab`.
-4. **CPU / Memory:** 4 vCPU, 8 GB RAM.
-5. **Disks: this step is mandatory — don't skip.** Keep the default boot
-   disk, then **Add disk** (the form section is at the bottom of the page;
-   easy to miss):
+4. **CPU / Memory:** **1 vCPU, 4 GB RAM** — the lean lab floor for Desktop
+   Experience + SQL together (cap SQL with `sp_configure 'max server memory',
+   2048` so it doesn't starve the GUI). Bump it here, or any time later in the
+   UI, if you want more — no rebuild needed.
+5. **Boot disk:** keep the catalog default source, but set its size to
+   **32 GiB**. This is a hard floor, not a preference: Windows Server's
+   documented minimum is 32 GB, and you can't provision a clone root smaller
+   than the golden DV's virtual size (~20 Gi here) — CDI clones grow, never
+   shrink below source.
+6. **Data disk: this step is mandatory for SQL — don't skip.** **Add disk**
+   (the form section is at the bottom of the page; easy to miss):
    - Name: **`data`** — type this explicitly; **don't leave the
      auto-suggested `disk-<adjective-animal-NN>`**, or the derived volume
      name overflows the 63-char cap (this is the field that bit us).
    - Source: Blank
-   - Size: **40 GiB**
+   - Size: **10 GiB** — ample for `demo_db` (8 MB mdf/ldf) plus `.bak`/`.trn`
+     artifacts; grow it if you load real data.
    - StorageClass: leave as default (picks up the cluster's default virt class).
    - Type: Disk (block / virtio).
 
@@ -173,9 +181,9 @@ In the OCP Console:
    > FirstLogonCommand only runs on first boot — if the disk wasn't present
    > then, you'll need to format it manually post-attach (the one-liner is
    > in § 4b's "No `D:` volume?" callout).
-6. Click **Customize VirtualMachine**.
-7. **Scripts** tab → **Sysprep** → paste the unattend XML below.
-8. **Untick "Start this VirtualMachine after creation"** so you can adjust
+7. Click **Customize VirtualMachine**.
+8. **Scripts** tab → **Sysprep** → paste the unattend XML below.
+9. **Untick "Start this VirtualMachine after creation"** so you can adjust
    firmware before first boot (next step). Then click **Create VirtualMachine**.
 
 ### 3a. Disable Secure Boot before first boot
@@ -283,12 +291,12 @@ Get-Volume -DriveLetter D
 ```
 
 Expect `FileSystem: NTFS`, `FileSystemLabel: DATA`, `DriveType: Fixed`,
-free space ≈ the size you specified in § 3 step 5.
+free space ≈ the size you specified in § 3 step 6.
 
-> **No `D:` volume?** Two likely causes: (a) § 3 step 5 was skipped and there
+> **No `D:` volume?** Two likely causes: (a) § 3 step 6 was skipped and there
 > is no blank data disk to initialize — `Get-Disk | Where-Object
 > PartitionStyle -in 'RAW','Uninitialized'` will return nothing; attach
-> a 40 GiB blank disk and re-run the FirstLogonCommand manually:
+> a 10 GiB blank disk and re-run the FirstLogonCommand manually:
 > `Get-Disk | Where-Object {$_.PartitionStyle -eq 'RAW' -or $_.PartitionStyle -eq 'Uninitialized'} | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -UseMaximumSize -DriveLetter D | Format-Volume -FileSystem NTFS -NewFileSystemLabel DATA -Confirm:$false -Force`.
 > (b) Windows assigned `D:` to the virtio-win CD before the FirstLogonCommand
 > ran — detach the CDs (below), then re-run the disk init.
@@ -672,7 +680,7 @@ Free, full-feature, non-production EULA. No license key, no activation.
    - **Data directories:** point everything at `D:\` —
      `D:\MSSQL\Data`, `D:\MSSQL\Log`, `D:\MSSQL\Backup`. Keeps the FLR story
      clean (SQL files live on the data disk, not `C:`). **If `D:` doesn't
-     exist yet**, go back to § 3 step 5 / § 4b — the SQL data dirs on `C:` muddy
+     exist yet**, go back to § 3 step 6 / § 4b — the SQL data dirs on `C:` muddy
      the per-volume snapshot story.
 3. Install **SSMS** (Management Studio) separately — also free, link on the
    same page (there's also an "Install SSMS" shortcut button on the SQL

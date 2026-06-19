@@ -147,7 +147,7 @@ oc create configmap win2k25-mssql-sysprep -n $NS \
   --from-file=unattend.xml=docs/unattend.xml
 ```
 
-Then a VM (illustrative — adjust instancetype/preference, data-disk size):
+Then a VM (lean single-disk lab default — bump instancetype/root per the note below):
 
 ```yaml
 apiVersion: kubevirt.io/v1
@@ -157,7 +157,7 @@ metadata:
   namespace: <your-namespace>
 spec:
   runStrategy: Always
-  instancetype: { name: u1.large, kind: VirtualMachineClusterInstancetype }
+  instancetype: { name: u1.medium, kind: VirtualMachineClusterInstancetype }  # 1 vCPU / 4Gi — see sizing note
   preference:  { name: windows.2k25.virtio, kind: VirtualMachineClusterPreference }
   dataVolumeTemplates:
   - metadata: { name: win2k25-mssql-root }
@@ -165,7 +165,7 @@ spec:
       source: { pvc: { namespace: <your-namespace>, name: win2k25 } }   # clone the seeded golden DV
       storage:
         storageClassName: <wffc-storageclass>
-        resources: { requests: { storage: 21Gi } }
+        resources: { requests: { storage: 32Gi } }   # ≥32Gi — see sizing note
   template:
     spec:
       domain:
@@ -179,6 +179,24 @@ spec:
       - name: sysprep
         sysprep: { configMap: { name: win2k25-mssql-sysprep } }
 ```
+
+> **Sizing — lean lab default vs. floors.** This manifest is tuned for the
+> smallest footprint a Windows Server 2025 lab VM needs: **1 vCPU / 4 Gi /
+> 32 Gi root**, single disk.
+> - **CPU/RAM** come from the **instancetype** (`u1.medium` = 1 vCPU / 4 Gi).
+>   That's the floor for Desktop Experience; need more? Pick a bigger one
+>   (`u1.large` = 2/8, `u1.xlarge` = 4/16) here or at create time in the UI —
+>   no image rebuild required.
+> - **Root = 32 Gi is a hard floor, not a preference.** Windows Server's
+>   documented minimum is 32 GB, and you **cannot** provision a clone root
+>   smaller than the golden DV's virtual size (~21 Gi) — CDI clones grow,
+>   never shrink below source. Don't drop this below 32 Gi.
+>
+> **Adding SQL Server?** SQL needs a second disk for its data/log/backup files
+> (→ `D:`). Add a `win2k25-mssql-data` blank `dataVolumeTemplate` (10 Gi is
+> ample for a demo DB), a matching `datadisk` device + volume, and the
+> unattend's `FirstLogonCommands` will initialize it as `D:` on first boot
+> (§ 4). Skip this for a plain single-disk VM.
 
 > **CRITICAL — the unattend must be edition/version-agnostic.** Do NOT leave a
 > hardcoded `<ProductKey>` in the `specialize` pass. A WS2022 Datacenter GVLK

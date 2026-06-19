@@ -143,6 +143,14 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 - [ ] **Build own Win2k22 golden image from ISO/pipeline** — kills the 180-day eval clock (no more § 4f rearm dance) and lets sshd + QGA + virtio be baked in. When done, § 4e collapses to "sshd preinstalled — just upload your key" and § 4f disappears. **Bake-in checklist:** OpenSSH.Server capability (DISM healthy on fresh ISO build) + service Automatic + TCP/22 firewall rule + PowerShell DefaultShell; **delete `C:\ProgramData\ssh\ssh_host_*` before sysprep /generalize** (else all clones share host keys); do NOT bake `authorized_keys` into a shared image (key upload stays a per-clone step); **must still add virtio-win drivers + QEMU Guest Agent** (current golden image had QGA preinstalled — easy to forget, and QGA is load-bearing for the whole VSS lab). Hold prep-doc edits until image exists + bake confirmed. **Standalone bake-in brief: [`docs/golden-image-build.md`](docs/golden-image-build.md)** (created 2026-06-12). **⚠️ CORRECTED 2026-06-16: the "licensed edition kills the eval clock" premise was WRONG. The 10-day clock is the *activate-within-10-days* deadline; `slmgr /ato` (online activation) unlocks the full ~180-day eval — no licensed/VL ISO required. Per-clone activation is now baked into `docs/unattend.xml` Order 4. **`docs/golden-image-build.md` rewritten 2026-06-18 — now Server-2025-centric, eval-clock premise corrected (activation not licensed ISO), and includes the configmap + `windows-efi-installer` pipeline procedure.**
 - [x] **Golden-image build pipeline working on the build cluster (2026-06-15/16).** Used Red Hat `windows-efi-installer` Tekton pipeline (v4.21.0) in the build namespace to build from ISO. **`win2k25` golden master built**: Server 2025 Standard **Desktop Experience** (build 26100.32230), **virtio + QGA + OpenSSH (GitHub-zip) baked**, unique per-clone host keys (host-key wipe before generalize). Validated on clone `golden-test-2k25`. Build answer file `windows2k25-autounattend-golden` (source in `collateral/win2k25-golden-*`). Key gotchas baked into knowledge: (a) `dism /Set-Edition` + sysprep = hang → never do edition conversion inline; (b) OpenSSH via GitHub-zip not Windows-Update FOD (egress); (c) edition selected via **`/IMAGE/INDEX`** not `/Image/Description` (refreshed ISO names drift); (d) **eval clock = activation, fixed by `slmgr /ato`**. A v2 **2022** golden configmap also exists (`collateral/configmap-win2k22-golden-v2.yaml`) but 2025 is the chosen lineage.
 - [ ] **Distribute `win2k25` golden image to other clusters via containerDisk-in-a-registry.** Wrap disk as OCI containerDisk (disk at `/disk/`), push to a registry all clusters reach, consume as `containerDisk` volume. **Registry choice pending.** Prefer **in-cluster build** of the containerDisk (the Mac `virtctl vmexport download` is flaky on multi-GB pulls — ephemeral-port exhaustion).
+- [ ] **(Lower priority) Build a new lean golden image.** The prep docs now
+  right-size at *clone* time (1 vCPU / 4 Gi via instancetype, 32 Gi root, 10 Gi
+  SQL data disk) — a workaround layered on the existing `win2k25-v1` golden
+  (~21 Gi virtual, `u1.large`-era assumptions). A leaner golden baseline
+  (minimal disk/feature footprint baked in, lean defaults) would let clones
+  start lean without per-VM overrides. **Deferred — focus is now the MSSQL POC,
+  not golden-image infra.** Specs landed in `docs/win2k25-vm-prep.md` +
+  `docs/windows-vm-prep.md` (2026-06-19).
 - [ ] **Bake parked `docs/windows-vm-prep.md` updates** (carried from 2026-05-25/28): (a) ODBC 18 self-signed cert workaround (`sqlcmd -C` / `TrustServerCertificate=yes`); (b) CD-detach + data-disk `Initialize-Disk` post-install §; (c) SQL default-path relocation via `xp_instance_regwrite`; (d) `type: Location` Restore CR pattern + cross-NS NodePort collision footnote + Routes-via-BackupPlan plan; (e) `micro` editor scp-from-Mac note; SSMS still deferred.
 - [ ] Bundle evidence in `output/` for the blog-writing agent (backup #1 packet copied 2026-05-25; restore-verification + FLR + load-test + MVP-validation packets still pending)
 - [ ] **Draft customer-facing technical response to the customer** — frame around the C+F MVP path (5-min RPO) with lab evidence citations + RPO/RTO positioning vs. crash-consistent baseline. Source material: `private-docs/research-tvk-mssql-vss-deep-dive.md`.
@@ -162,23 +170,25 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-06-18 — long, multi-thread):** (1) Corrected a months-old
-misdiagnosis — the "GitHub CDN egress block" was the **NIC MTU black-hole**
-(A/B proven: 1500 → stall; 1400 → fast). (2) Migrated to on-demand session-state
-routing and split internal identifiers into the gitignored `CLAUDE.local.md`.
-(3) **Rebuilt + distributed the win2k25 golden image** — and the rebake surfaced
-that **Server 2025 ships OpenSSH Server inbox**: the prior GitHub-zip install
-broke the inbox firewall rule's app-lock (caught by validating a clone *before*
-distributing). Fixed the recipe to use inbox SSH, re-baked **`win2k25-v1`**,
-validated it, and packaged+pushed it as the new registry tag via a **new
-reusable in-cluster export Job** (`manifests/golden-containerdisk-push.yaml`;
-there's no native CDI export-to-registry). Commits `7884580`, `1a69219`,
-`52f08ad`, `39b1d13` on `origin/main`. (4) **Validated end-to-end on the consume
-cluster** — a UI-recreated `:2026-06-18` clone accepts inbound SSH (→ PowerShell,
-key auth) + RDP with **no § 5c** firewall step, so § 5c is now documented as
-baked-in. The rebake → distribute → validate arc is **COMPLETE**. POC/lab tracks
-still untouched — golden-image infra all day. **Next session = back to the MSSQL
-work** (the consume `win2k25-mssql` has its `D:` data disk — SQL-ready; items 2–3).
+**Last session (2026-06-19 — short, doc-only):** Trimmed the VM-build recipes to
+a **lean lab profile — 1 vCPU / 4 Gi / 32 Gi root / 10 Gi data**. `win2k25-vm-prep.md`
+example now uses `u1.medium` + 32 Gi root and stays **single-disk** (the SQL `D:`
+disk is a clearly-optional aside — most readers want a plain Win2k25 VM; Vince
+adds the second disk himself). `windows-vm-prep.md` (the 2022 MSSQL build doc)
+slimmed to match: 1 vCPU / 4 GB, new 32 Gi boot-disk step, data disk 40→10 GiB,
+steps renumbered + cross-refs fixed. Documented the **32 Gi root = hard floor**
+(WS min 32 GB + can't clone below the golden's ~21 Gi virtual size). Added a
+**lower-priority task: build a new lean golden image** (clone-time sizing is a
+workaround; baking lean defaults into the golden is deferred). **Focus is now
+the MSSQL POC, not golden-image infra.** Commit pushed to `origin/main`.
+
+**Prior session (2026-06-18 — golden-image infra):** MTU-black-hole misdiagnosis
+fix; on-demand session-state routing + `CLAUDE.local.md` split; **rebuilt +
+distributed `win2k25-v1`** (inbox-SSH; rebake → distribute → validate arc COMPLETE).
+Detail in `docs/session-state.md`.
+
+**Next session = back to the MSSQL work** — the consume `win2k25-mssql` has its
+`D:` data disk and is SQL-ready (open items 2–3).
 
 **Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
 - **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
@@ -197,23 +207,23 @@ work** (the consume `win2k25-mssql` has its `D:` data disk — SQL-ready; items 
 
 *Golden-image rebake → distribute → validate is DONE (2026-06-18). Below is what's left.*
 
-**Open items (priority order):**
-1. **Apply the port-based-rule fix to the 2022 golden recipe** (gitignored
-   `collateral/configmap-win2k22-golden-v2.yaml`) — 2022 has no inbox OpenSSH, so
-   it keeps GitHub-zip + a uniquely-named port-based `-Profile Any` rule. For the
-   future-2022 path (customer-2022 analysis).
-2. **Install SQL Server** on the consume `win2k25-mssql` if continuing lab work
-   there (§ 6 of prep doc); BackupPlan/Restore then need adapting for the TopoLVM
-   `VolumeSnapshotClass`.
-3. **MSSQL-VSS POC tracks (primary deliverable, still untouched)** — Trilio
+**Open items (priority order — MSSQL POC is the focus now):**
+1. **Install SQL Server** on the consume `win2k25-mssql` (it's SQL-ready: `D:`
+   disk present) — § 6 of prep doc; BackupPlan/Restore then need adapting for the
+   TopoLVM `VolumeSnapshotClass`.
+2. **MSSQL-VSS POC tracks (primary deliverable, still untouched)** — Trilio
    virt-launcher hook (QGA-exec lifecycle); in-guest VSS component requestor
    ("Mechanism E"; deferred Q: does it work via QGA freeze/thaw alone?); demo to
    engineering.
-4. **Send the customer reply + internal status email** — drafts at
+3. **Send the customer reply + internal status email** — drafts at
    `private-docs/2026-06-01-*.md`, never sent.
-5. **Carried POC/evidence work:** Python write generator → backup #2 under load →
+4. **Carried POC/evidence work:** Python write generator → backup #2 under load →
    FLR demo → BackupPlan v2 (Routes + host-rewrite) → bundle `output/` for the
    blog agent → Confluence article + blog. (Detail in § Project Status.)
+5. **(Lower — golden-image infra, deprioritized):** build a new lean golden image
+   (§ Project Status); apply the port-based-rule fix to the 2022 golden recipe
+   (gitignored `collateral/configmap-win2k22-golden-v2.yaml` — 2022 has no inbox
+   OpenSSH, keeps GitHub-zip + a uniquely-named port-based `-Profile Any` rule).
 
    *Optional cleanup: delete the superseded `:2026-06-16` ghcr tag. The 60Gi
    `win2k25-build-scratch` PVC (build cluster) is reusable — keep for next export.*
