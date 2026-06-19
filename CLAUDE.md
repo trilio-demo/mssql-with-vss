@@ -177,7 +177,8 @@ there's no native CDI export-to-registry). Commits `7884580`, `1a69219`,
 cluster** — a UI-recreated `:2026-06-18` clone accepts inbound SSH (→ PowerShell,
 key auth) + RDP with **no § 5c** firewall step, so § 5c is now documented as
 baked-in. The rebake → distribute → validate arc is **COMPLETE**. POC/lab tracks
-still untouched — golden-image infra all day.
+still untouched — golden-image infra all day. **Next session = back to the MSSQL
+work** (the consume `win2k25-mssql` has its `D:` data disk — SQL-ready; items 2–3).
 
 **Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
 - **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
@@ -187,7 +188,8 @@ still untouched — golden-image infra all day.
   UI from `:2026-06-18`**; SSH (NodePort → PowerShell, key auth) + RDP validated,
   **no § 5c needed**. **No SQL yet.** DataImportCron `win2k25-trilio-golden` now
   imports `:2026-06-18` (cron spec is immutable → delete+recreate to retag).
-  sysprep ConfigMap `sysprep-win2k25-mssql-lsn0fz` exists standalone.
+  sysprep ConfigMap `sysprep-win2k25-mssql-lsn0fz` exists standalone. **`D:` data
+  disk confirmed present → SQL-ready** (next-session SQL install can proceed).
 - **Build cluster (Ceph RBD)** — golden-image BUILD cluster. **`win2k25-v1` DV =
   the sole golden** (inbox SSH, validated; old `win2k25` DV deleted — the
   `:2026-06-16` ghcr tag is the only remaining fallback). Registry tag
