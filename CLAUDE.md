@@ -173,48 +173,48 @@ distributing). Fixed the recipe to use inbox SSH, re-baked **`win2k25-v1`**,
 validated it, and packaged+pushed it as the new registry tag via a **new
 reusable in-cluster export Job** (`manifests/golden-containerdisk-push.yaml`;
 there's no native CDI export-to-registry). Commits `7884580`, `1a69219`,
-`52f08ad`, `39b1d13` on `origin/main`. POC/lab tracks still untouched —
-golden-image infra all day.
+`52f08ad`, `39b1d13` on `origin/main`. (4) **Validated end-to-end on the consume
+cluster** — a UI-recreated `:2026-06-18` clone accepts inbound SSH (→ PowerShell,
+key auth) + RDP with **no § 5c** firewall step, so § 5c is now documented as
+baked-in. The rebake → distribute → validate arc is **COMPLETE**. POC/lab tracks
+still untouched — golden-image infra all day.
 
 **Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
 - **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
   CREDENTIAL, `demo_db` 16 rows). *Don't touch unless rerunning experiments.*
   State unverified since 2026-06-01; eval grace ended 2026-06-03.
-- **Consume/validate cluster (LVMS/TopoLVM)** — the consume SQL VM Running
-  (MTU 1400, activated to 12/14/2026, SSH via NodePort, **no SQL yet**); catalog
-  boot source `win2k25-trilio-golden` (DataImportCron) imports the registry image.
-  *(Cron still points at the OLD tag until the bumped manifest is applied here.)*
+- **Consume/validate cluster (LVMS/TopoLVM)** — `win2k25-mssql` **recreated via the
+  UI from `:2026-06-18`**; SSH (NodePort → PowerShell, key auth) + RDP validated,
+  **no § 5c needed**. **No SQL yet.** DataImportCron `win2k25-trilio-golden` now
+  imports `:2026-06-18` (cron spec is immutable → delete+recreate to retag).
+  sysprep ConfigMap `sysprep-win2k25-mssql-lsn0fz` exists standalone.
 - **Build cluster (Ceph RBD)** — golden-image BUILD cluster. **`win2k25-v1` DV =
   the sole golden** (inbox SSH, validated; old `win2k25` DV deleted — the
   `:2026-06-16` ghcr tag is the only remaining fallback). Registry tag
   `:2026-06-18` pushed. Pipeline `windows-efi-installer` v4.21.0 in the build ns.
 
+*Golden-image rebake → distribute → validate is DONE (2026-06-18). Below is what's left.*
+
 **Open items (priority order):**
-1. **Validate the new golden on the consume cluster + drop § 5c.** Apply the
-   bumped DataImportCron (`:2026-06-18`) there, clone a real VM, and confirm
-   **SSH works with NO § 5c firewall step** — the true end-to-end test (build-side
-   validation was config-level only: inbox sshd at `system32\OpenSSH`, app-matched
-   rule broadened to all profiles). Once it passes, **drop § 5c** from
-   `docs/win2k25-vm-prep.md` and retire the old `:2026-06-16` tag + `win2k25` DV.
-2. **Apply the port-based-rule fix to the 2022 golden recipe** (gitignored
+1. **Apply the port-based-rule fix to the 2022 golden recipe** (gitignored
    `collateral/configmap-win2k22-golden-v2.yaml`) — 2022 has no inbox OpenSSH, so
    it keeps GitHub-zip + a uniquely-named port-based `-Profile Any` rule. For the
    future-2022 path (customer-2022 analysis).
-3. **Install SQL Server** on the consume SQL VM if continuing lab work there
-   (§ 6 of prep doc); BackupPlan/Restore then need adapting for the TopoLVM
+2. **Install SQL Server** on the consume `win2k25-mssql` if continuing lab work
+   there (§ 6 of prep doc); BackupPlan/Restore then need adapting for the TopoLVM
    `VolumeSnapshotClass`.
-4. **MSSQL-VSS POC tracks (primary deliverable, still untouched)** — Trilio
+3. **MSSQL-VSS POC tracks (primary deliverable, still untouched)** — Trilio
    virt-launcher hook (QGA-exec lifecycle); in-guest VSS component requestor
    ("Mechanism E"; deferred Q: does it work via QGA freeze/thaw alone?); demo to
    engineering.
-5. **Send the customer reply + internal status email** — drafts at
+4. **Send the customer reply + internal status email** — drafts at
    `private-docs/2026-06-01-*.md`, never sent.
-6. **Carried POC/evidence work:** Python write generator → backup #2 under load →
+5. **Carried POC/evidence work:** Python write generator → backup #2 under load →
    FLR demo → BackupPlan v2 (Routes + host-rewrite) → bundle `output/` for the
    blog agent → Confluence article + blog. (Detail in § Project Status.)
 
-   *Build-cluster cleanup pending: the completed `golden-cdisk-push-*` Job + the
-   60Gi `win2k25-build-scratch` PVC (reusable — keep for next export).*
+   *Optional cleanup: delete the superseded `:2026-06-16` ghcr tag. The 60Gi
+   `win2k25-build-scratch` PVC (build cluster) is reusable — keep for next export.*
 
 **Continuity reminders:**
 - **Be deliberate about which cluster you touch** — three live footprints on

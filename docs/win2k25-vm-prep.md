@@ -299,39 +299,33 @@ Verify only those two principals remain:
 
 No `sshd` restart is needed — it reads the file per authentication.
 
-### 5c. Allow inbound 22 on the **Public** firewall profile
+### 5c. Inbound 22 on the **Public** profile — baked in (normally no action)
 
-This is the one that silently eats whole afternoons. KubeVirt's masquerade
-network is **always classified `Public`** in the guest, but the OpenSSH inbound
-allow rule frequently ends up scoped to **`Private` only**. Result: `sshd`
-answers on `127.0.0.1` and its own `10.0.2.2` (loopback/own-IP bypass the
-firewall) so it *looks* fine in-guest, but **every inbound connection from the
-pod / NodePort is dropped** — direct pod-IP, service, and NodePort all hang
-with zero entries in the sshd log. Broaden the rule(s) to `Any`:
+KubeVirt's masquerade network is **always classified `Public`** in the guest, so
+an OpenSSH rule scoped `Private`-only silently drops every inbound connection
+(pod-IP, service, NodePort) while `sshd` still answers on loopback in-guest.
+**The inbox-SSH golden image (`:2026-06-18` and later) already broadens its
+firewall rule to `-Profile Any`** — validated end-to-end 2026-06-18 (a fresh
+clone accepted inbound SSH over the NodePort with no per-clone step). So on a
+current image **there's nothing to do here.**
+
+<details>
+<summary>Only if SSH hangs (older image with the Private-scoped rule)</summary>
+
+If `sshd` answers on `127.0.0.1`/own-IP in-guest but every inbound connection
+hangs with zero sshd-log entries, the rule is `Private`-only. Broaden it:
 
 ```powershell
-# broaden any existing OpenSSH rule, and add a guaranteed Any-profile allow
 Get-NetFirewallRule -DisplayName 'OpenSSH*' -EA SilentlyContinue | Set-NetFirewallRule -Profile Any
 New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP-Any' -DisplayName 'OpenSSH Server (sshd) Any' `
   -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -Profile Any
 ```
 
-Verify (every enabled inbound 22 rule should read `profile=Any`):
-
-```powershell
-Get-NetFirewallRule -Direction Inbound -Enabled True | ForEach-Object {
-  $r=$_; if (($r | Get-NetFirewallPortFilter).LocalPort -eq 22) { $r.DisplayName + ' | ' + $r.Profile }
-}
-```
-
-> Diagnostic shortcut: from a pod, `bash -c 'exec 3<>/dev/tcp/<vm-pod-ip>/22; head -c 50 <&3'`.
-> A returned `SSH-2.0-...` banner means the guest is reachable and the problem is
-> external (NodePort/edge firewall, § 5d). **No** banner with `sshd` listening
-> in-guest ⇒ this Public-profile firewall block.
->
-> The current golden image ships with the Private-scoped rule, so this is a
-> required per-clone step until the image is rebaked with `-Profile Any`
-> (tracked against the golden-image build recipe).
+Diagnostic: from a pod, `bash -c 'exec 3<>/dev/tcp/<vm-pod-ip>/22; head -c 50 <&3'`.
+A `SSH-2.0-...` banner means the guest is reachable and the problem is external
+(NodePort/edge firewall, § 5d); **no** banner with `sshd` listening in-guest ⇒
+this Public-profile block.
+</details>
 
 ### 5d. Expose port 22 (NodePort Service)
 
@@ -377,7 +371,7 @@ ssh -i <your-private-key> Administrator@<worker-ip> -p <nodeport>
 | `specialize` parse failure → "restarted unexpectedly" loop | version-mismatched `<ProductKey>` in unattend (2022 GVLK on 2025) | no ProductKey; activate via `slmgr /ato` (§ 3, § 4) |
 | Launcher stuck `Init:0/3`, `FailedMapVolume ... device does not exist` | Immediate-binding SC on node-local storage | use a WFFC StorageClass (§ 2) |
 | `slmgr /ato` → `0x80072EE2`; TCP/443 connects but HTTPS times out | guest NIC MTU 1500 > OVN overlay 1400 (Windows ignores DHCP MTU); large packets dropped | set guest MTU to overlay (`netsh … mtu=1400`) — §4a. NOT an egress/proxy issue |
-| SSH/NodePort hangs, **zero** sshd connection logs, but sshd answers on 127.0.0.1/own-IP in-guest | OpenSSH firewall rule scoped to **Private**; masquerade network is **Public** → inbound dropped | broaden rule(s) to `-Profile Any` (§ 5c) |
+| SSH/NodePort hangs, **zero** sshd connection logs, but sshd answers on 127.0.0.1/own-IP in-guest | OpenSSH rule scoped **Private**; masquerade net is **Public** → inbound dropped. *Baked `-Profile Any` as of `:2026-06-18`; only older images hit this* | broaden rule(s) to `-Profile Any` (§ 5c) |
 | SSH key auth silently refused | `administrators_authorized_keys` bad ACL (or UTF-16/BOM) | ASCII write + `icacls /inheritance:r` SYSTEM+Administrators (§ 5b) |
 | Catalog clones an old image | template DataSource is a stale static PVC | DataImportCron with a distinct DataSource, or build VM against your DV (§ 2) |
 | ghcr pull `unauthorized` | private package + missing/!email creds | `ghcr-cdi` secret, GitHub username (not email) (§ 1) |
