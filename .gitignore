@@ -54,3 +54,5 @@ learnings.md
 # Session-state archaeology (companion to CLAUDE.md's forward-looking brief);
 # holds internal cluster identifiers, IPs, reach commands — local-only
 docs/session-state.md
+# Password-populated unattend (real lab creds) — local-only, never commit
+docs/unattend-populated.xml
