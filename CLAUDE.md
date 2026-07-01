@@ -170,25 +170,26 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-06-19 — short, doc-only):** Trimmed the VM-build recipes to
-a **lean lab profile — 1 vCPU / 4 Gi / 32 Gi root / 10 Gi data**. `win2k25-vm-prep.md`
-example now uses `u1.medium` + 32 Gi root and stays **single-disk** (the SQL `D:`
-disk is a clearly-optional aside — most readers want a plain Win2k25 VM; Vince
-adds the second disk himself). `windows-vm-prep.md` (the 2022 MSSQL build doc)
-slimmed to match: 1 vCPU / 4 GB, new 32 Gi boot-disk step, data disk 40→10 GiB,
-steps renumbered + cross-refs fixed. Documented the **32 Gi root = hard floor**
-(WS min 32 GB + can't clone below the golden's ~21 Gi virtual size). Added a
-**lower-priority task: build a new lean golden image** (clone-time sizing is a
-workaround; baking lean defaults into the golden is deferred). **Focus is now
-the MSSQL POC, not golden-image infra.** Commit pushed to `origin/main`.
+**Last session (2026-07-01 — intel + a partner-facing deliverable):** A
+**partner-led re-entry of the customer opp is in motion** (who/what is
+confidential — see `CLAUDE.local.md` § Customer context). Short version: the
+customer's OCPv migration is struggling on a competitor's backup+DR stack, and a
+**feature-readiness call (week of 07-06)** will evaluate swapping to Trilio.
+Built the deliverable for that call: `output/trilio-mssql-app-consistency-approach.md`
+— tightly MSSQL-app-consistency-focused, scrubbed for external sharing, dual-use
+(readable + slide-extractable; Cowork produced a finished PPT from it). Also
+detailed the **MSSQL-VSS POC track** into 3 sub-tracks and delivered a **Sub-track 1
+(virt-launcher hook) build plan** — not started (gated on SQL install; deferred
+behind the deliverable). No cluster/code work.
 
-**Prior session (2026-06-18 — golden-image infra):** MTU-black-hole misdiagnosis
-fix; on-demand session-state routing + `CLAUDE.local.md` split; **rebuilt +
-distributed `win2k25-v1`** (inbox-SSH; rebake → distribute → validate arc COMPLETE).
-Detail in `docs/session-state.md`.
+**Prior session (2026-06-19 — doc-only):** Trimmed VM-build recipes to a lean lab
+profile (1 vCPU / 4 Gi / 32 Gi root / 10 Gi data; 32 Gi root = hard floor). Added
+a lower-priority "build a lean golden" task. Detail in `docs/session-state.md`.
 
-**Next session = back to the MSSQL work** — the consume `win2k25-mssql` has its
-`D:` data disk and is SQL-ready (open items 2–3).
+**Next session** — depends on how the call lands. Most likely: **start Sub-track 1**
+— install SQL on the consume `win2k25-mssql` (open item 1, the gate for all hook
+work), then prototype the TVK virt-launcher hook — plus any follow-up collateral
+the call surfaces.
 
 **Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
 - **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
