@@ -1,0 +1,17 @@
+=== prehook run 2026-07-05T02:18:20Z pid 1752
+prehook: anchor guest-exec pid=896
+Processed 632 pages for database 'demo_db', file 'demo_db' on file 1.
+Processed 1 pages for database 'demo_db', file 'demo_db_log' on file 1.
+BACKUP DATABASE successfully processed 633 pages in 0.144 seconds (34.298 MB/sec).
+prehook: verify guest-exec pid=2624
+BackupName|BackupDescription|BackupType|ExpirationDate|Compressed|Position|DeviceType|UserName|ServerName|DatabaseName|DatabaseVersion|DatabaseCreationDate|BackupSize|FirstLSN|LastLSN|CheckpointLSN|DatabaseBackupLSN|BackupStartDate|BackupFinishDate|SortOrder|CodePage|UnicodeLocaleId|UnicodeComparisonStyle|CompatibilityLevel|SoftwareVendorId|SoftwareVersionMajor|SoftwareVersionMinor|SoftwareVersionBuild|MachineName|Flags|BindingID|RecoveryForkID|Collation|FamilyGUID|HasBulkLoggedData|IsSnapshot|IsReadOnly|IsSingleUser|HasBackupChecksums|IsDamaged|BeginsLogChain|HasIncompleteMetaData|IsForceOffline|IsCopyOnly|FirstRecoveryForkID|ForkPointLSN|RecoveryModel|DifferentialBaseLSN|DifferentialBaseGUID|BackupTypeDescription|BackupSetGUID|CompressedBackupSize|Containment|KeyAlgorithm|EncryptorThumbprint|EncryptorType|LastValidRestoreTime|TimeZone|CompressionAlgorithm
+----------|-----------------|----------|--------------|----------|--------|----------|--------|----------|------------|---------------|--------------------|----------|--------|-------|-------------|-----------------|---------------|----------------|---------|--------|---------------|----------------------|------------------|----------------|--------------------|--------------------|--------------------|-----------|-----|---------|--------------|---------|----------|-----------------|----------|----------|------------|------------------|---------|--------------|---------------------|--------------|----------|-------------------|------------|-------------|-------------------|--------------------|---------------------|-------------|--------------------|-----------|------------|-------------------|-------------|--------------------|--------|--------------------
+NULL|NULL|1|NULL|0|1|2|NT AUTHORITY\SYSTEM|WIN-1LU5F0AC846\MSSQLSERVER01|demo_db|998|2026-05-25 01:12:11.000|5259264|48000005030500001|48000005030800001|48000005030500001|48000005018000037|2026-07-04 22:18:20.000|2026-07-04 22:18:20.000|52|0|1033|196609|170|4608|17|0|1000|WIN-1LU5F0AC846|1536|0D5CF82A-309B-4084-91B4-EA6EF0B41B88|B4DB8527-3506-4DAB-98DD-FD854B6282CD|SQL_Latin1_General_CP1_CI_AS|B4DB8527-3506-4DAB-98DD-FD854B6282CD|0|0|0|0|0|0|0|0|0|1|B4DB8527-3506-4DAB-98DD-FD854B6282CD|NULL|FULL|NULL|NULL|Database|F40FBF77-3DCA-4071-AB1A-BDFFD564A907|5259264|0|NULL|NULL|NULL|NULL|0|NULL
+
+(1 rows affected)
+prehook: COPY_ONLY anchor taken + verified OK
+
+=== POSTHOOK ===
+=== posthook run 2026-07-05T02:18:29Z pid 1827
+posthook: fsfreeze-status: {"return":"frozen"}
+posthook: QGA alive, ack OK

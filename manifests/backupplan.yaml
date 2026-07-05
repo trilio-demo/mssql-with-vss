@@ -21,6 +21,21 @@ spec:
       kind: Target
       name: sa-nfs-cr-demo
       namespace: trilio-system
+  # Sub-track 1 Phase 1: run the MSSQL COPY_ONLY-anchor hook in the VM's
+  # virt-launcher `compute` container (where virsh + the QGA socket live).
+  hookConfig:
+    mode: Sequential
+    hooks:
+      - hook:
+          apiVersion: triliovault.trilio.io/v1
+          kind: Hook
+          name: mssql-anchor-hook
+          namespace: mssql-vss-lab
+        podSelector:
+          labels:
+            - matchLabels:
+                vm.kubevirt.io/name: win2k22-aqua-junglefowl-90
+        containerRegex: ^compute$
   backupPlanComponents:
     customSelector:
       selectResources:

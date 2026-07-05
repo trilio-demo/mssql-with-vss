@@ -1,0 +1,8 @@
+++ virsh qemu-agent-command mssql-vss-lab_win2k22-aqua-junglefowl-90 '{"execute":"guest-exec","arguments":{"path":"C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\180\\Tools\\Binn\\SQLCMD.EXE","arg":["-S",".\\MSSQLSERVER01","-E","-C","-b","-W","-s","|","-Q","RESTORE HEADERONLY FROM DISK=N'\''D:\\SQLBackup\\tvk-prehook-anchor.bak'\''"],"capture-output":true}}'
++ OUT='error: internal error: unable to execute QEMU agent command '\''guest-exec'\'': Command guest-exec has been disabled: the command is not allowed'
++ echo 'posthook: guest-exec submit not accepted yet (error: internal error: unable to execute QEMU agent command '\''guest-exec'\'': Command guest-exec has been disabled: the command is not allowed), retrying'
+posthook: guest-exec submit not accepted yet (error: internal error: unable to execute QEMU agent command 'guest-exec': Command guest-exec has been disabled: the command is not allowed), retrying
+--
+++ virsh qemu-agent-command mssql-vss-lab_win2k22-aqua-junglefowl-90 '{"execute":"guest-exec","arguments":{"path":"C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\180\\Tools\\Binn\\SQLCMD.EXE","arg":["-S",".\\MSSQLSERVER01","-E","-C","-b","-W","-s","|","-Q","RESTORE HEADERONLY FROM DISK=N'\''D:\\SQLBackup\\tvk-prehook-anchor.bak'\''"],"capture-output":true}}'
++ OUT='error: internal error: unable to execute QEMU agent command '\''guest-exec'\'': Command guest-exec has been disabled: the command is not allowed'
+(180 consecutive guest-exec rejections across the post-hook's lifetime — full trace showed the freeze is held until the post-hook returns)

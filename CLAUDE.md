@@ -157,7 +157,8 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 - [x] Repo shipped (bootstrap step 13): **https://github.com/trilio-demo/mssql-with-vss** (public, 2026-05-24)
 - [x] **Lab guide published to public repo (2026-06-07).** `docs/lab-guide.md` — 12-step reproducible procedure with inline SQL + manifests + troubleshooting. Audience-widened (not just "Trilio colleagues"), scrubbed of internal taxonomy + competitive/roadmap framing. Internal-only companion docs (`flow.md`, `flow-prompt-claude-design.md`, `flow.pdf`) parked in `private-docs/`. `*.pdf` gitignored. Commit `a683311` on `origin/main`.
 - [x] **Shareable VM-build recipe shipped (2026-06-08).** `docs/unattend.xml` (new, heavily commented Sysprep answer file) + restructured `docs/windows-vm-prep.md` (cluster-agnostic; § 4e SSH install rewritten as 3 paths — `Add-WindowsCapability` / GitHub zip / RDP drag-and-drop). Commit `7dda088` on `origin/main`. Validated end-to-end by spinning a fresh VM on a *different* cluster (the TopoLVM consume cluster, not the original Portworx evidence cluster) — see Session State for the new lab footprint.
-- [ ] **Prototype Trilio hook into virt-launcher pod** — drive in-guest SQL flows (e.g. pre-backup `COPY_ONLY .bak`) automatically via QGA-exec lifecycle hooks. Closes the `[MANUAL]` gap that today's lab guide hands to the colleague.
+- [x] **Sub-track 1 Phase 1 PASS (2026-07-04): TVK virt-launcher hook drives in-guest MSSQL.** Hook CR `mssql-anchor-hook` + BackupPlan `hookConfig` (podSelector `vm.kubevirt.io/name`, containerRegex `^compute$`) → pre-hook takes + verifies a `COPY_ONLY` anchor via QGA guest-exec as SYSTEM on every backup. Validated backup #7 `mssql-vss-backup-rlkmn` (clean 4s freeze, 7×3197/3198/18264). **Three TVK findings (cost backups #3–#6):** (1) ordering = pre → freeze → snapshot → post-hook → thaw, thaw WAITS for post-hook, and QGA disables guest-exec while frozen → post-hooks must be freeze-safe + fast (guest-ping only); (2) freeze held >60s trips the SQL VSS writer timeout (thaw at +60s, no 18264 completions); (3) TVK pins Hook resourceVersion into BackupPlan at admission — hook edits need an RV re-pin patch or backups silently run the stale hook. Evidence: `output/hook-poc-20260704.md` + 5 raw artifacts; manifests updated.
+- [ ] **File JIRA ticket(s) for TVK hook improvements** from the hook POC — source: `private-docs/tvk-product-recommendations-hook-poc-20260704.md` (post-thaw hook point, native guestExecAction, stale-RV pinning fix, hook output capture, freeze-duration guardrail, docs).
 - [ ] **Prototype in-guest VSS component requestor** — A2 path / "Mechanism E." POC scope: hardcoded MSSQL + `SqlServerWriter`, single SQL/Windows version. Drive via QGA-exec first. **Deferred design Q:** can it work via QGA freeze/thaw alone (no QGA-exec)? If yes, hook + VSS tracks collapse into one.
 - [ ] **Demo POC to Trilio engineering** — handoff so engineering productionizes a multi-DB component requestor (VSS writer-GUID enumeration → Exchange, AD DS, etc.). Sales narrative: "one mechanism → n databases" vs. per-DB Explorer-style integrations.
 - [ ] **Confluence article + blog** — org/customer narrative tying the hook mechanism + VSS POC together. Distinct from `docs/lab-guide.md` (which is the reproducibility guide for the today-proven path).
@@ -193,8 +194,10 @@ the call surfaces.
 
 **Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
 - **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
-  CREDENTIAL, `demo_db` 16 rows). *Don't touch unless rerunning experiments.*
-  State unverified since 2026-06-01; eval grace ended 2026-06-03.
+  CREDENTIAL, `demo_db` 16 rows). **Now also the Sub-track 1 dev env (Vince,
+  2026-07-04)** — PX license renewed. Verified 2026-07-04: VM Running, SQL
+  services healthy; **fixed guest MTU (1400) + activated eval (`slmgr /ato`,
+  expires 12/31/2026)**.
 - **Consume/validate cluster (LVMS/TopoLVM)** — `win2k25-mssql` **recreated via the
   UI from `:2026-06-18`**; SSH (NodePort → PowerShell, key auth) + RDP validated,
   **no § 5c needed**. **No SQL yet.** DataImportCron `win2k25-trilio-golden` now
