@@ -172,26 +172,28 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-07-01 — intel + a partner-facing deliverable):** A
-**partner-led re-entry of the customer opp is in motion** (who/what is
-confidential — see `CLAUDE.local.md` § Customer context). Short version: the
-customer's OCPv migration is struggling on a competitor's backup+DR stack, and a
-**feature-readiness call (week of 07-06)** will evaluate swapping to Trilio.
-Built the deliverable for that call: `output/trilio-mssql-app-consistency-approach.md`
-— tightly MSSQL-app-consistency-focused, scrubbed for external sharing, dual-use
-(readable + slide-extractable; Cowork produced a finished PPT from it). Also
-detailed the **MSSQL-VSS POC track** into 3 sub-tracks and delivered a **Sub-track 1
-(virt-launcher hook) build plan** — not started (gated on SQL install; deferred
-behind the deliverable). No cluster/code work.
+**Last session (2026-07-04/05 — Sub-track 1 hook POC: PASS):** Built + validated
+the **TVK virt-launcher hook** on the **evidence cluster** (Vince's call — SQL
+already there; PX license renewed). Pre-backup hook auto-takes + verifies the
+COPY_ONLY anchor; validated backup #7 `mssql-vss-backup-rlkmn` (clean 4s freeze,
+full signature). Three TVK findings (post-hook runs frozen / thaw waits on it;
+>60s freeze trips SQL VSS writer timeout; Hook RV pinned in BackupPlan — edits
+need re-pin). **JIRA filed** on the 6 product asks
+(`private-docs/tvk-product-recommendations-hook-poc-20260704.md`). **Decision:
+`BACKUP LOG → S3` cadence is DBA-owned** (SQL Agent; "Mechanism F" now primary)
+— `private-docs/log-backup-cadence-decision-20260705.md`. Customer PPT/visual
+sources updated to match (anchor = automatic; cadence = DBA-owned). Also fixed
+evidence-VM MTU (1400) + activation (`/ato`, expires 12/31/2026). Pushed:
+`73a68f0` (POC + evidence bundle), `bdbadb2` (doc updates).
 
-**Prior session (2026-06-19 — doc-only):** Trimmed VM-build recipes to a lean lab
-profile (1 vCPU / 4 Gi / 32 Gi root / 10 Gi data; 32 Gi root = hard floor). Added
-a lower-priority "build a lean golden" task. Detail in `docs/session-state.md`.
+**Context for the week:** the **feature-readiness call (week of 07-06)** on the
+partner-led re-entry (see `CLAUDE.local.md`) is imminent — Vince refreshes the
+Cowork PPT + Claude Design visual from the two updated source docs before it.
 
-**Next session** — depends on how the call lands. Most likely: **start Sub-track 1**
-— install SQL on the consume `win2k25-mssql` (open item 1, the gate for all hook
-work), then prototype the TVK virt-launcher hook — plus any follow-up collateral
-the call surfaces.
+**Next session** — likely post-call follow-ups, plus the natural lab
+continuation: enable SQL Agent + the 5-min `BACKUP LOG TO URL` job on the
+evidence VM, add the pre-hook log-chain freshness check (follow-on steps in the
+cadence decision doc), then Python write generator → backup under load → FLR.
 
 **Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
 - **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
@@ -213,31 +215,39 @@ the call surfaces.
 *Golden-image rebake → distribute → validate is DONE (2026-06-18). Below is what's left.*
 
 **Open items (priority order — MSSQL POC is the focus now):**
-1. **Install SQL Server** on the consume `win2k25-mssql` (it's SQL-ready: `D:`
-   disk present) — § 6 of prep doc; BackupPlan/Restore then need adapting for the
-   TopoLVM `VolumeSnapshotClass`.
-2. **MSSQL-VSS POC tracks (primary deliverable, still untouched)** — Trilio
-   virt-launcher hook (QGA-exec lifecycle); in-guest VSS component requestor
-   ("Mechanism E"; deferred Q: does it work via QGA freeze/thaw alone?); demo to
+1. **Lab continuation on the evidence VM:** SQL Agent 5-min `BACKUP LOG TO URL`
+   job + pre-hook log-chain freshness check (follow-on list in
+   `private-docs/log-backup-cadence-decision-20260705.md`; remember the
+   BackupPlan RV re-pin after any Hook edit).
+2. **Remaining POC tracks:** in-guest VSS component requestor ("Mechanism E";
+   deferred Q: QGA freeze/thaw alone? Note: hook POC proved post-hooks run
+   frozen — relevant to that design); restore-side hook automation; demo to
    engineering.
-3. **Send the customer reply + internal status email** — drafts at
-   `private-docs/2026-06-01-*.md`, never sent.
-4. **Carried POC/evidence work:** Python write generator → backup #2 under load →
+3. **Carried POC/evidence work:** Python write generator → backup under load →
    FLR demo → BackupPlan v2 (Routes + host-rewrite) → bundle `output/` for the
    blog agent → Confluence article + blog. (Detail in § Project Status.)
-5. **(Lower — golden-image infra, deprioritized):** build a new lean golden image
-   (§ Project Status); apply the port-based-rule fix to the 2022 golden recipe
-   (gitignored `collateral/configmap-win2k22-golden-v2.yaml` — 2022 has no inbox
-   OpenSSH, keeps GitHub-zip + a uniquely-named port-based `-Profile Any` rule).
+4. **Send the customer reply + internal status email** — drafts at
+   `private-docs/2026-06-01-*.md`, never sent (may be superseded by the
+   partner-call track).
+5. **(Demoted) Install SQL Server on the consume `win2k25-mssql`** — was the
+   Sub-track 1 gate, but the hook work moved to the evidence cluster; still
+   useful for a second-cluster validation env.
+6. **(Lower — golden-image infra, deprioritized):** lean golden image; 2022
+   golden recipe port-based-rule fix (`collateral/configmap-win2k22-golden-v2.yaml`).
 
    *Optional cleanup: delete the superseded `:2026-06-16` ghcr tag. The 60Gi
    `win2k25-build-scratch` PVC (build cluster) is reusable — keep for next export.*
 
 **Continuity reminders:**
 - **Be deliberate about which cluster you touch** — three live footprints on
-  different storage backends; the evidence cluster is the protected env.
-- The last several sessions have all been golden-image infrastructure; the POC
-  tracks (item 3) are the real deliverable and keep getting deferred.
+  different storage backends. The evidence cluster is now also the Sub-track 1
+  dev env (Vince, 2026-07-04).
+- **⚠️ Retention pruned the historical backups:** the latest-5 policy deleted
+  backup #1 (`2phcr`) and the Exp-4 backup (`kcxdl`) from the target when this
+  session's 5 hook-POC backups landed. Exp-4 *evidence* (files, LSNs) is safe
+  in the repo, but the restorable Exp-4 backup no longer exists.
+- **Announce backup/long-op launches loudly** (CR name, purpose, ETA) — Vince
+  watches the Trilio UI in parallel (memory: `feedback_announce_cluster_runs`).
 - Real cluster/VM/customer identifiers live in the gitignored `CLAUDE.local.md`
   (auto-loaded) + `docs/session-state.md` — refer to them here by role-label
   only. Caveat: prior commits already exposed some identifiers in public git
