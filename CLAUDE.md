@@ -157,12 +157,16 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 - [x] Repo shipped (bootstrap step 13): **https://github.com/trilio-demo/mssql-with-vss** (public, 2026-05-24)
 - [x] **Lab guide published to public repo (2026-06-07).** `docs/lab-guide.md` — 12-step reproducible procedure with inline SQL + manifests + troubleshooting. Audience-widened (not just "Trilio colleagues"), scrubbed of internal taxonomy + competitive/roadmap framing. Internal-only companion docs (`flow.md`, `flow-prompt-claude-design.md`, `flow.pdf`) parked in `private-docs/`. `*.pdf` gitignored. Commit `a683311` on `origin/main`.
 - [x] **Shareable VM-build recipe shipped (2026-06-08).** `docs/unattend.xml` (new, heavily commented Sysprep answer file) + restructured `docs/windows-vm-prep.md` (cluster-agnostic; § 4e SSH install rewritten as 3 paths — `Add-WindowsCapability` / GitHub zip / RDP drag-and-drop). Commit `7dda088` on `origin/main`. Validated end-to-end by spinning a fresh VM on a *different* cluster (the TopoLVM consume cluster, not the original Portworx evidence cluster) — see Session State for the new lab footprint.
-- [x] **Sub-track 1 Phase 1 PASS (2026-07-04): TVK virt-launcher hook drives in-guest MSSQL.** Hook CR `mssql-anchor-hook` + BackupPlan `hookConfig` (podSelector `vm.kubevirt.io/name`, containerRegex `^compute$`) → pre-hook takes + verifies a `COPY_ONLY` anchor via QGA guest-exec as SYSTEM on every backup. Validated backup #7 `mssql-vss-backup-rlkmn` (clean 4s freeze, 7×3197/3198/18264). **Three TVK findings (cost backups #3–#6):** (1) ordering = pre → freeze → snapshot → post-hook → thaw, thaw WAITS for post-hook, and QGA disables guest-exec while frozen → post-hooks must be freeze-safe + fast (guest-ping only); (2) freeze held >60s trips the SQL VSS writer timeout (thaw at +60s, no 18264 completions); (3) TVK pins Hook resourceVersion into BackupPlan at admission — hook edits need an RV re-pin patch or backups silently run the stale hook. Evidence: `output/hook-poc-20260704.md` + 5 raw artifacts; manifests updated.
+- [x] **Sub-track 1 Phase 1 PASS (2026-07-04): TVK virt-launcher hook drives in-guest MSSQL.** Hook CR `mssql-anchor-hook` + BackupPlan `hookConfig` (podSelector `vm.kubevirt.io/name`, containerRegex `^compute$`) → pre-hook takes + verifies a `COPY_ONLY` anchor via QGA guest-exec as SYSTEM on every backup. Validated backup #7 `mssql-vss-backup-rlkmn` (clean 4s freeze, 7×3197/3198/18264). **Three TVK findings (cost backups #3–#6):** (1) ordering = pre → freeze → snapshot → post-hook → thaw, thaw WAITS for post-hook, and QGA disables guest-exec while frozen → post-hooks must be freeze-safe + fast (guest-ping only); (2) freeze held >60s trips the SQL VSS writer timeout (thaw at +60s, no 18264 completions); (3) TVK pins Hook resourceVersion into BackupPlan at admission — **CORRECTED 2026-07-16 via marker-based repro (`repro/hook-sequencing/`): execution follows the LIVE Hook content; the stale pin is an audit-trail bug (BackupPlan pin + Backup.status.hookStatus both report a hook version that didn't run). The 07-04 "backup #4 re-ran the old hook" inference was wrong — that failure was finding (1).** Evidence: `output/hook-poc-20260704.md` + 5 raw artifacts; manifests updated.
 - [x] **Decision (2026-07-05): the `BACKUP LOG → S3` cadence is application/DBA-owned** (SQL Server Agent job), NOT Trilio-orchestrated — "Mechanism F" is now the primary shape. Options, rationale, and the pre-hook log-chain freshness-check idea (future work): `private-docs/log-backup-cadence-decision-20260705.md`. Customer-facing sources updated to match (cadence = DBA-owned; anchor = automatic): `output/trilio-mssql-app-consistency-approach.md` + `private-docs/flow-prompt-claude-design.md` — Vince refreshes the Cowork PPT + Claude Design visual from these.
+- [x] **Hook-sequencing repro kit shipped to engineering (2026-07-16).** `repro/hook-sequencing/` — Windows-free minimal repro (Fedora VM + probe Hook; log = pass/fail oracle) validated end-to-end on the evidence cluster, pushed (`b130d7d`), zipped + attached to the hook-sequence JIRA with a clarifying comment (freeze *held* not failed; backward-compat trade-off of reorder-thaw vs `postUnquiesce`). Same session: **RV-pinning finding corrected via marker test** — live Hook content executes; defect is audit-trail misreport only. Repro ns torn down; Vince to verify the eventual fix (5.4.0) on the Windows VM.
 - [x] **JIRA ticket filed (2026-07-05) for TVK hook improvements** from the hook POC — source: `private-docs/tvk-product-recommendations-hook-poc-20260704.md` (post-thaw hook point, native guestExecAction, stale-RV pinning fix, hook output capture, freeze-duration guardrail, docs).
 - [ ] **Prototype in-guest VSS component requestor** — A2 path / "Mechanism E." POC scope: hardcoded MSSQL + `SqlServerWriter`, single SQL/Windows version. Drive via QGA-exec first. **Deferred design Q:** can it work via QGA freeze/thaw alone (no QGA-exec)? If yes, hook + VSS tracks collapse into one.
 - [ ] **Demo POC to Trilio engineering** — handoff so engineering productionizes a multi-DB component requestor (VSS writer-GUID enumeration → Exchange, AD DS, etc.). Sales narrative: "one mechanism → n databases" vs. per-DB Explorer-style integrations.
 - [ ] **Confluence article + blog** — org/customer narrative tying the hook mechanism + VSS POC together. Distinct from `docs/lab-guide.md` (which is the reproducibility guide for the today-proven path).
+- [x] **Experiment 5 — BitLocker/vTPM backup+restore (2026-07-07/08, DONE).** Customer-driven question: does TVK back up/restore an OCPv Windows VM with a **persistent vTPM + BitLocker-encrypted C:** without falling back to the recovery key? **Result: no — by TVK's own design.** TVK 5.3.1 unconditionally excludes the KubeVirt `persistent-state-for` PVC (vTPM/EFI state) from backup data (confirmed via the Backup CR's own status message + a CRD-schema check for an override — none exists). Every restore mints a brand-new vTPM (proved via differing PVC suffix + differing `Get-Tpm` `OwnerAuth`); a BitLocker-sealed VM always hits the recovery screen, and the escrowed 48-digit recovery password is a full unconditional unlock (lab-verified end to end, screenshot captured). Architecture follow-up: for backup/DR-friendly encryption-at-rest, recommend storage-layer KMS (Portworx + Vault) over guest BitLocker+vTPM. Full evidence: [`output/exp5-tpm-bitlocker-20260708.md`](output/exp5-tpm-bitlocker-20260708.md). **Confluence article written:** [`output/confluence-bitlocker-vtpm-guide.md`](output/confluence-bitlocker-vtpm-guide.md) — SA/Support-facing replication guide + customer-expectation framing + architecture guidance. Design doc: [`docs/exp5-tpm-bitlocker.md`](docs/exp5-tpm-bitlocker.md). **Found while scoping:** ocp-px's stock `win2k25` DataSource was broken (PVC `NotFound`, no cron) — `manifests/exp5-win2k25-dataimportcron.yaml` fixed it with a distinct `win2k25-trilio-golden` DataSource, reusable beyond this experiment. **Decision (2026-07-12): not filing a feature-request JIRA for a BackupPlan-level opt-in** — TVK Product will instead document that the vTPM/EFI state PVC exclusion is intentional behavior. (Unrelated to the separately-filed hook-sequence JIRA, now targeted for 5.4.0 — see below.) Lab namespaces `tpm-lab`/`tpm-lab-restore` on ocp-px torn down (2026-07-12) — this experiment's lab footprint is fully cleaned up.
+- [x] **Experiment 6 — plain freeze/thaw-only MSSQL backup/restore (2026-07-09, DONE).** Customer-driven question: does a *regular* Trilio VM backup (no custom hook, no guest-exec) leave MSSQL working after restore, or is some extra mechanism needed to bring it out of the frozen state? **Result: no extra mechanism needed — vanilla QGA freeze/thaw is sufficient.** Confirmed via a fresh, hook-free BackupPlan (`mssql-vss-backupplan-nohook`, additive — doesn't touch the Sub-track 1 hook-enabled one): standard 7×3197/7×3198/7×18264 signature fired automatically (4s freeze window), restore came back with `demo_db` ONLINE, marker row intact with exact original timestamp, **and a fresh write succeeded post-restore** (row 17→18) — proving full read/write health, not just readability. This reconfirms (with fresh, live, restorable evidence) what backup #1 already showed back on 2026-05-25 before the custom hook existed — that original backup was since pruned by retention. Full writeup: [`output/exp6-freeze-thaw-only-20260709.md`](output/exp6-freeze-thaw-only-20260709.md). Manifests: `manifests/backupplan-nohook.yaml`, `manifests/backup-nohook.yaml`, `manifests/restore-exp6.yaml`. Restore ns `mssql-vss-restore-exp6` torn down (2026-07-09); the no-hook BackupPlan + its backup remain on ocp-px for reference.
+- [ ] **Experiment 7 (planned, 2026-07-09) — TVK 5.4.0 S3-streaming comparison.** TVK 5.4.0 ships significant S3 streaming improvements. Plan: repeat the MSSQL backup/restore tests (freeze/thaw timing, backup/restore wall-clock, data sizes) on 5.4.0 and compare against the 5.3.1 baseline already captured (backup #1, Exp-4, Exp-6). **Target cluster still TBD — Portworx evidence cluster (in-place upgrade) vs. a separate cluster** (avoids disturbing the live Sub-track 1 / hook-POC environment on ocp-px, but means rebuilding the SQL VM elsewhere). Decide before starting.
 
 ---
 
@@ -172,35 +176,58 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-07-04/05 — Sub-track 1 hook POC: PASS):** Built + validated
-the **TVK virt-launcher hook** on the **evidence cluster** (Vince's call — SQL
-already there; PX license renewed). Pre-backup hook auto-takes + verifies the
-COPY_ONLY anchor; validated backup #7 `mssql-vss-backup-rlkmn` (clean 4s freeze,
-full signature). Three TVK findings (post-hook runs frozen / thaw waits on it;
->60s freeze trips SQL VSS writer timeout; Hook RV pinned in BackupPlan — edits
-need re-pin). **JIRA filed** on the 6 product asks
-(`private-docs/tvk-product-recommendations-hook-poc-20260704.md`). **Decision:
-`BACKUP LOG → S3` cadence is DBA-owned** (SQL Agent; "Mechanism F" now primary)
-— `private-docs/log-backup-cadence-decision-20260705.md`. Customer PPT/visual
-sources updated to match (anchor = automatic; cadence = DBA-owned). Also fixed
-evidence-VM MTU (1400) + activation (`/ato`, expires 12/31/2026). Pushed:
-`73a68f0` (POC + evidence bundle), `bdbadb2` (doc updates).
+**Last session (2026-07-16 — engineering handoff: repro kit shipped; RV finding corrected):**
+Engineering is duplicating the hook/QGA sequencing tests. Built + validated
+`repro/hook-sequencing/` — a **Windows-free minimal repro** (Fedora VM + probe
+Hook whose log is the pass/fail oracle, ~15 min end-to-end); validated live on
+the evidence cluster (POST hook saw `frozen`, guest-exec rejected, thaw waited
+<1 s after hook exit), then pushed (`b130d7d`), zipped + **attached to the
+hook-sequence JIRA** with a clarifying comment (quiesce doesn't fail — the
+freeze is *held*, silently degrading to crash-consistent past SQL's 60 s VSS
+timeout; backward-compat trade-off: reorder-thaw vs. a `postUnquiesce` hook
+point). **Do not reference the SA cluster in the ticket** — some engineers
+can't reach it. **Finding 3 OVERTURNED by marker test:** backups execute the
+LIVE Hook even with a stale RV pin; the real defect is audit-trail misreport
+(pin + `Backup.status.hookStatus` show a version that didn't run) — the 07-04
+"stale hook re-ran" was a misattribution (backup #5's post-re-pin failure was
+the tell). Vince dropped the RV topic from the JIRA. Repro ns torn down.
+**Vince committed (Slack) to verifying engineering's eventual fix against the
+Windows/MSSQL evidence VM.**
+
+**Prior session (2026-07-07 through 07-12 — Experiments 5 & 6, both DONE):**
+Exp 5 (BitLocker/vTPM): TVK 5.3.1 unconditionally excludes the vTPM/EFI state
+PVC → every restore mints a new vTPM; escrowed recovery password is a full
+unlock. Confluence guide shared 07-08. Exp 6: plain hook-free freeze/thaw
+backup restores MSSQL fully working (fresh-write verified). A second
+MSSQL-interested prospect surfaced (see `CLAUDE.local.md`) — 2 customers now
+care about this story. Detail: `docs/session-state.md`.
 
 **Context for the week:** the **feature-readiness call (week of 07-06)** on the
-partner-led re-entry (see `CLAUDE.local.md`) is imminent — Vince refreshes the
-Cowork PPT + Claude Design visual from the two updated source docs before it.
+partner-led re-entry (see `CLAUDE.local.md`) — check whether it already
+happened / what came out of it, since this brief predates knowing the
+outcome.
 
-**Next session** — likely post-call follow-ups, plus the natural lab
-continuation: enable SQL Agent + the 5-min `BACKUP LOG TO URL` job on the
-evidence VM, add the pre-hook log-chain freshness check (follow-on steps in the
-cadence decision doc), then Python write generator → backup under load → FLR.
+**Next session** — **Experiment 7 (TVK 5.4.0 S3-streaming comparison) is
+explicitly parked — Vince confirmed nothing to do here for a couple of
+weeks (as of 2026-07-12).** Don't pick a cluster or start setup unless he
+raises it. **No Exp-5 JIRA to file** — Vince decided (2026-07-12) to hold
+it; TVK Product will document the vTPM/EFI exclusion as intentional instead
+(unrelated to the separate hook-sequence JIRA, already filed, now targeted
+for 5.4.0). `tpm-lab`/`tpm-lab-restore` torn down (2026-07-12) — Experiment
+5 is fully closed out, nothing left over. Then likely post-call
+follow-ups, plus the natural MSSQL lab continuation: enable SQL Agent + the
+5-min `BACKUP LOG TO URL` job on the evidence VM, add the pre-hook log-chain
+freshness check (follow-on steps in the cadence decision doc), then Python
+write generator → backup under load → FLR.
 
 **Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
 - **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
-  CREDENTIAL, `demo_db` 16 rows). **Now also the Sub-track 1 dev env (Vince,
-  2026-07-04)** — PX license renewed. Verified 2026-07-04: VM Running, SQL
+  CREDENTIAL, `demo_db` 18 rows post-Exp-6). **Now also the Sub-track 1 dev env
+  (Vince, 2026-07-04)** — PX license renewed. Verified 2026-07-04: VM Running, SQL
   services healthy; **fixed guest MTU (1400) + activated eval (`slmgr /ato`,
-  expires 12/31/2026)**.
+  expires 12/31/2026)**. **Also carries:** the no-hook BackupPlan + backup
+  from Experiment 6 (kept for reference; its restore ns already torn down).
+  Experiment 5's `tpm-lab`/`tpm-lab-restore` fully torn down (2026-07-12).
 - **Consume/validate cluster (LVMS/TopoLVM)** — `win2k25-mssql` **recreated via the
   UI from `:2026-06-18`**; SSH (NodePort → PowerShell, key auth) + RDP validated,
   **no § 5c needed**. **No SQL yet.** DataImportCron `win2k25-trilio-golden` now
@@ -215,24 +242,48 @@ cadence decision doc), then Python write generator → backup under load → FLR
 *Golden-image rebake → distribute → validate is DONE (2026-06-18). Below is what's left.*
 
 **Open items (priority order — MSSQL POC is the focus now):**
-1. **Lab continuation on the evidence VM:** SQL Agent 5-min `BACKUP LOG TO URL`
+0. **Verify engineering's hook-ordering fix when it lands (targeted TVK
+   5.4.0):** first against the Fedora repro kit (`repro/hook-sequencing/`
+   README defines the fixed-output oracle: POST sees `thawed`, guest-exec
+   ALLOWED, `Unfreezed` before POST start), then a full acceptance run on
+   the Windows/MSSQL evidence VM (Vince committed to this on Slack,
+   2026-07-16). Nothing to do until engineering produces a candidate build.
+1. **Experiment 7 (scoped 2026-07-09, PARKED 2026-07-12) — TVK 5.4.0
+   S3-streaming comparison vs 5.3.1 baseline.** Vince confirmed nothing to
+   do here for a couple of weeks — **do not start setup or pick a cluster
+   unless he raises it.** When resumed: decide target cluster first
+   (Portworx evidence cluster in-place upgrade vs. a separate cluster —
+   trade-off is disturbing the live Sub-track 1 env vs. rebuilding the SQL
+   VM elsewhere), then repeat the MSSQL backup/restore timing tests. **2
+   customers now interested in the MSSQL story** (see `CLAUDE.local.md`) —
+   this comparison feeds both.
+2. **Experiments 5 & 6: DONE.** Exp 5 (BitLocker/vTPM) Confluence article
+   shared 2026-07-08; Exp 6 (freeze/thaw-only consistency) evidence
+   written 2026-07-09, restore ns already torn down. **No JIRA to file for
+   Exp 5** — Vince decided 2026-07-12 to hold it; TVK Product will
+   document the vTPM/EFI exclusion as intentional instead (see
+   `output/exp5-tpm-bitlocker-20260708.md` Follow-ups section — do not
+   confuse with the separate, already-filed hook-sequence JIRA now
+   targeted for 5.4.0). `tpm-lab`/`tpm-lab-restore` torn down (2026-07-12)
+   — both experiments are fully closed out, nothing left over.
+3. **Lab continuation on the evidence VM:** SQL Agent 5-min `BACKUP LOG TO URL`
    job + pre-hook log-chain freshness check (follow-on list in
    `private-docs/log-backup-cadence-decision-20260705.md`; remember the
    BackupPlan RV re-pin after any Hook edit).
-2. **Remaining POC tracks:** in-guest VSS component requestor ("Mechanism E";
+4. **Remaining POC tracks:** in-guest VSS component requestor ("Mechanism E";
    deferred Q: QGA freeze/thaw alone? Note: hook POC proved post-hooks run
    frozen — relevant to that design); restore-side hook automation; demo to
    engineering.
-3. **Carried POC/evidence work:** Python write generator → backup under load →
+5. **Carried POC/evidence work:** Python write generator → backup under load →
    FLR demo → BackupPlan v2 (Routes + host-rewrite) → bundle `output/` for the
    blog agent → Confluence article + blog. (Detail in § Project Status.)
-4. **Send the customer reply + internal status email** — drafts at
+6. **Send the customer reply + internal status email** — drafts at
    `private-docs/2026-06-01-*.md`, never sent (may be superseded by the
    partner-call track).
-5. **(Demoted) Install SQL Server on the consume `win2k25-mssql`** — was the
+7. **(Demoted) Install SQL Server on the consume `win2k25-mssql`** — was the
    Sub-track 1 gate, but the hook work moved to the evidence cluster; still
    useful for a second-cluster validation env.
-6. **(Lower — golden-image infra, deprioritized):** lean golden image; 2022
+8. **(Lower — golden-image infra, deprioritized):** lean golden image; 2022
    golden recipe port-based-rule fix (`collateral/configmap-win2k22-golden-v2.yaml`).
 
    *Optional cleanup: delete the superseded `:2026-06-16` ghcr tag. The 60Gi
