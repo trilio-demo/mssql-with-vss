@@ -1,0 +1,46 @@
+# Fixes the win2k25 boot source on the evidence cluster (Portworx).
+#
+# Discovered 2026-07-07: the cluster's existing `win2k25` DataSource in
+# openshift-virtualization-os-images is broken — its backing PVC is
+# "NotFound" and no DataImportCron feeds it, so no win2k25 image is actually
+# importable there today (only win2k22 is present cluster-wide).
+#
+# This creates a NEW, working DataSource fed from the Trilio win2k25 golden
+# in ghcr — same pattern as docs/win2k25-golden-dataimportcron.yaml, adapted
+# for this cluster's storage (px-csi-replicated; Immediate binding is fine
+# here — win2k22's DV already uses it — the WFFC caveat in the doc is about
+# node-local backends like TopoLVM, which Portworx is not).
+#
+# DISTINCT name — deliberately NOT "win2k25" — so the existing (broken)
+# shared DataSource is left alone rather than overwritten in place.
+#
+# Prereqs (run first, not committed — PAT via env var):
+#   export GHCR_USER=<your-github-username>
+#   export GHCR_READ_PAT=<read:packages PAT>
+#   envsubst < docs/ghcr-secret.example.yaml | \
+#     oc --context $CTX apply -n openshift-virtualization-os-images -f -
+#   envsubst < docs/ghcr-secret.example.yaml | \
+#     oc --context $CTX apply -n openshift-cnv -f -   # cron's digest-poll job needs it too
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataImportCron
+metadata:
+  name: win2k25-trilio-golden
+  namespace: openshift-virtualization-os-images
+  labels:
+    instancetype.kubevirt.io/default-preference: windows.2k25.virtio
+spec:
+  managedDataSource: win2k25-trilio-golden
+  schedule: "0 6 * * *" # daily digest poll; pinned dated tag below = effectively import-once
+  garbageCollect: Outdated
+  importsToKeep: 2
+  template:
+    spec:
+      source:
+        registry:
+          url: "docker://ghcr.io/trilio-demo/win2k25-golden:2026-06-18"
+          secretRef: ghcr-cdi
+      storage:
+        storageClassName: px-csi-replicated
+        resources:
+          requests:
+            storage: 21Gi

@@ -1,0 +1,64 @@
+# Experiment 5 (docs/exp5-tpm-bitlocker.md): win2k25 VM with a persistent
+# vTPM, destined for BitLocker-on-C:. Single disk, no SQL, no hooks.
+#
+# Clones from the `win2k25-trilio-golden` DataSource — apply
+# manifests/exp5-win2k25-dataimportcron.yaml first (fixes the cluster's
+# broken stock `win2k25` DataSource; see that file's header).
+#
+# Other prereqs in ns tpm-lab (see design doc Phase 0):
+#   - configmap `win2k25-tpm-sysprep` (from docs/unattend.xml)
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: win2k25-tpm
+  namespace: tpm-lab
+spec:
+  runStrategy: Always
+  instancetype:
+    name: u1.medium # 1 vCPU / 4 Gi
+    kind: VirtualMachineClusterInstancetype
+  preference:
+    name: windows.2k25.virtio
+    kind: VirtualMachineClusterPreference
+  dataVolumeTemplates:
+    - metadata:
+        name: win2k25-tpm-root
+      spec:
+        sourceRef:
+          kind: DataSource
+          name: win2k25-trilio-golden
+          namespace: openshift-virtualization-os-images
+        storage:
+          storageClassName: px-csi-replicated
+          resources:
+            requests:
+              storage: 32Gi # hard floor — golden virtual size ~21Gi + WS2025 minimum
+  template:
+    spec:
+      domain:
+        devices:
+          # The point of the experiment. KubeVirt stores swtpm + EFI nvram
+          # state in a side PVC labeled `persistent-state-for: win2k25-tpm`
+          # (NOT referenced below — that's why VM-scoped backups miss it).
+          tpm:
+            persistent: true
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: sysprep
+              cdrom:
+                bus: sata
+        firmware:
+          bootloader:
+            efi:
+              persistent: true
+              secureBoot: false # matches the evidence VM; Secure Boot variant is a follow-up
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: win2k25-tpm-root
+        - name: sysprep
+          sysprep:
+            configMap:
+              name: win2k25-tpm-sysprep

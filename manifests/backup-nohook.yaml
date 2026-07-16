@@ -1,0 +1,13 @@
+# Experiment 6 backup — apply with `oc create -f` (generateName).
+apiVersion: triliovault.trilio.io/v1
+kind: Backup
+metadata:
+  generateName: mssql-vss-backup-nohook-
+  namespace: mssql-vss-lab
+spec:
+  type: Full
+  backupPlan:
+    apiVersion: triliovault.trilio.io/v1
+    kind: BackupPlan
+    name: mssql-vss-backupplan-nohook
+    namespace: mssql-vss-lab

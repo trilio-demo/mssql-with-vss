@@ -1,0 +1,15 @@
+# Experiment 5 backup — apply with `oc create -f` (generateName).
+# Gate before restore: the captured-resource list must include the
+# persistent-state-for-win2k25-tpm-* PVC with a data snapshot.
+apiVersion: triliovault.trilio.io/v1
+kind: Backup
+metadata:
+  generateName: exp5-tpm-backup-
+  namespace: tpm-lab
+spec:
+  type: Full
+  backupPlan:
+    apiVersion: triliovault.trilio.io/v1
+    kind: BackupPlan
+    name: exp5-tpm-backupplan
+    namespace: tpm-lab

@@ -1,0 +1,64 @@
+# Experiment 5 access: SSH + RDP NodePorts for the source VM (tpm-lab) and
+# the restored VM (tpm-lab-restore). nodePort omitted -> auto-assigned
+# (NodePorts are cluster-wide; fixed numbers would collide across namespaces).
+# Note: the BitLocker recovery screen is pre-boot — use the VNC console for
+# those screenshots, not RDP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: exp5-tpm-ssh
+  namespace: tpm-lab
+spec:
+  type: NodePort
+  selector:
+    vm.kubevirt.io/name: win2k25-tpm
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: exp5-tpm-rdp
+  namespace: tpm-lab
+spec:
+  type: NodePort
+  selector:
+    vm.kubevirt.io/name: win2k25-tpm
+  ports:
+    - name: rdp
+      port: 3389
+      targetPort: 3389
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: exp5-tpm-restore-ssh
+  namespace: tpm-lab-restore
+spec:
+  type: NodePort
+  selector:
+    vm.kubevirt.io/name: win2k25-tpm
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: exp5-tpm-restore-rdp
+  namespace: tpm-lab-restore
+spec:
+  type: NodePort
+  selector:
+    vm.kubevirt.io/name: win2k25-tpm
+  ports:
+    - name: rdp
+      port: 3389
+      targetPort: 3389
+      protocol: TCP

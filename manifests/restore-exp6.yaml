@@ -1,0 +1,19 @@
+# Experiment 6 restore -> fresh namespace mssql-vss-restore-exp6.
+# Confirms: does a plain freeze/thaw-only backup restore into a working,
+# app-consistent MSSQL, with no guest-exec/manual intervention needed?
+apiVersion: triliovault.trilio.io/v1
+kind: Restore
+metadata:
+  generateName: mssql-vss-restore-exp6-
+  namespace: mssql-vss-restore-exp6
+spec:
+  restoreFlags:
+    skipIfAlreadyExists: true
+  source:
+    type: Location
+    location: 169c618f-89c5-4317-9950-4afcb7f5031f/c9e65b64-f29e-4f4a-81a5-89fee8f5fab2
+    target:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Target
+      name: sa-nfs-cr-demo
+      namespace: trilio-system

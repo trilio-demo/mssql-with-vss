@@ -1,0 +1,23 @@
+# Experiment 5 arm-A restore → fresh namespace tpm-lab-restore.
+# Fill spec.source.location from:
+#   oc get backup <exp5-tpm-backup-xxxxx> -n tpm-lab -o jsonpath='{.status.location}'
+# Right after completion, verify (BEFORE judging boot behavior):
+#   - state PVC suffix matches the source namespace's (Trilio-restored, not minted)
+#   - exactly ONE PVC with label persistent-state-for=win2k25-tpm
+#   - no stale ownerReferences on it (GC would delete the PVC)
+apiVersion: triliovault.trilio.io/v1
+kind: Restore
+metadata:
+  generateName: exp5-tpm-restore-
+  namespace: tpm-lab-restore
+spec:
+  restoreFlags:
+    skipIfAlreadyExists: true
+  source:
+    type: Location
+    location: e422f2c3-08a7-4151-be23-97f3b05ecf6a/36ae5963-4c6a-4ef9-8e88-87607a182ec6
+    target:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Target
+      name: sa-nfs-cr-demo
+      namespace: trilio-system
