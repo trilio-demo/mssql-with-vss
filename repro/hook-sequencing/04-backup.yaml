@@ -1,0 +1,14 @@
+# Trigger one probe backup. Apply with `oc create` (generateName), once per run:
+#   oc create -f 04-backup.yaml
+apiVersion: triliovault.trilio.io/v1
+kind: Backup
+metadata:
+  generateName: seq-probe-backup-
+  namespace: tvk-hook-seq-repro
+spec:
+  type: Full
+  backupPlan:
+    apiVersion: triliovault.trilio.io/v1
+    kind: BackupPlan
+    name: seq-probe-backupplan
+    namespace: tvk-hook-seq-repro

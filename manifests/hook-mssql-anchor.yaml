@@ -15,7 +15,11 @@
 #   QGA calls only (guest-ping, guest-fsfreeze-status are allowed while frozen).
 #
 # ⚠️ TVK pins the Hook's resourceVersion into BackupPlan.spec.hookConfig at admission.
-#   After editing this Hook, re-pin or backups silently run the OLD hook:
+#   CORRECTED 2026-07-16 (repro/hook-sequencing/, marker-based test): backups
+#   EXECUTE the live Hook content even with a stale pin — the defect is that the
+#   BackupPlan pin + Backup.status.hookStatus keep reporting the old RV (audit
+#   trail claims a hook version that didn't run). Re-pin after edits anyway to
+#   keep the recorded RV honest:
 #     RV=$(oc -n mssql-vss-lab get hook mssql-anchor-hook -o jsonpath='{.metadata.resourceVersion}')
 #     oc -n mssql-vss-lab patch backupplan mssql-vss-backupplan --type=json \
 #       -p "[{\"op\":\"replace\",\"path\":\"/spec/hookConfig/hooks/0/hook/resourceVersion\",\"value\":\"$RV\"}]"

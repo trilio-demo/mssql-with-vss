@@ -1,0 +1,80 @@
+# Sequencing probe Hook — pre and post run the SAME three QGA checks and log
+# the results with timestamps. The hook log IS the test oracle; the hooks
+# always exit 0 so the backup completes on both broken and fixed builds.
+#
+# Checks per phase:
+#   1. guest-fsfreeze-status          — is the guest frozen right now?
+#   2. guest-exec /bin/true           — does QGA accept exec? (disabled while frozen)
+#   3. sleep 15 + guest-fsfreeze-status again
+#                                      — does the thaw happen while the post-hook
+#                                        is still running, or does it wait for us?
+#
+# Observed TVK 5.3.1 ordering (proven 2026-07-04 on the MSSQL lab, backups #3–#6):
+#   pre-hook → QGA fsfreeze → CSI snapshot → post-hook → thaw
+# so on a broken build the POST log shows frozen / BLOCKED / still-frozen(+15s).
+# On a corrected build (thaw before post-hook) it shows thawed / ALLOWED / thawed.
+#
+# PROBE_REVISION doubles as a hook-version marker for the resourceVersion-pinning
+# check: TVK's webhook pins the Hook's resourceVersion/uid into
+# BackupPlan.spec.hookConfig at admission, and Backup.status.hookStatus reports
+# that pinned RV. Validated 2026-07-16 (TVK 5.3.1): after editing the Hook
+# WITHOUT re-pinning, the backup EXECUTED the new hook content (log printed the
+# new PROBE_REVISION) while the BackupPlan pin and the Backup's hookStatus both
+# still reported the OLD resourceVersion — i.e. the pin goes stale and the
+# status misreports which hook version ran, but execution follows the live Hook.
+# Check on your build by bumping the number, backing up, and comparing the log's
+# PROBE_REVISION against the RV in the BackupPlan / Backup status.
+apiVersion: triliovault.trilio.io/v1
+kind: Hook
+metadata:
+  name: seq-probe-hook
+  namespace: tvk-hook-seq-repro
+spec:
+  pre:
+    maxRetryCount: 1
+    timeoutSeconds: 120
+    ignoreFailure: false
+    execAction:
+      command:
+        - bash
+        - -c
+        - |
+          set -u
+          exec > >(tee -a /var/tmp/tvk-seqprobe-pre.log) 2>&1
+          echo "=== PRE start $(date -u +%Y-%m-%dT%H:%M:%SZ)  PROBE_REVISION=1"
+          DOM=$(virsh list --name | head -n1)
+          [ -n "$DOM" ] || { echo "PRE: no libvirt domain" >&2; exit 1; }
+          FS=$(virsh qemu-agent-command "$DOM" '{"execute":"guest-fsfreeze-status"}' 2>&1)
+          echo "PRE fsfreeze-status(start): $FS"
+          EX=$(virsh qemu-agent-command "$DOM" '{"execute":"guest-exec","arguments":{"path":"/bin/true"}}' 2>&1) \
+            && echo "PRE guest-exec: ALLOWED $EX" \
+            || echo "PRE guest-exec: BLOCKED $EX"
+          sleep 15
+          FS=$(virsh qemu-agent-command "$DOM" '{"execute":"guest-fsfreeze-status"}' 2>&1)
+          echo "PRE fsfreeze-status(+15s): $FS"
+          echo "=== PRE end $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          exit 0
+  post:
+    maxRetryCount: 1
+    timeoutSeconds: 120
+    ignoreFailure: false
+    execAction:
+      command:
+        - bash
+        - -c
+        - |
+          set -u
+          exec > >(tee -a /var/tmp/tvk-seqprobe-post.log) 2>&1
+          echo "=== POST start $(date -u +%Y-%m-%dT%H:%M:%SZ)  PROBE_REVISION=1"
+          DOM=$(virsh list --name | head -n1)
+          [ -n "$DOM" ] || { echo "POST: no libvirt domain" >&2; exit 1; }
+          FS=$(virsh qemu-agent-command "$DOM" '{"execute":"guest-fsfreeze-status"}' 2>&1)
+          echo "POST fsfreeze-status(start): $FS"
+          EX=$(virsh qemu-agent-command "$DOM" '{"execute":"guest-exec","arguments":{"path":"/bin/true"}}' 2>&1) \
+            && echo "POST guest-exec: ALLOWED $EX" \
+            || echo "POST guest-exec: BLOCKED $EX"
+          sleep 15
+          FS=$(virsh qemu-agent-command "$DOM" '{"execute":"guest-fsfreeze-status"}' 2>&1)
+          echo "POST fsfreeze-status(+15s): $FS"
+          echo "=== POST end $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          exit 0

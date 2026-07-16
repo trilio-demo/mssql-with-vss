@@ -1,0 +1,72 @@
+# Probe VM for the TVK hook-sequencing repro — plain Fedora, no Windows/MSSQL.
+#
+# Root disk is a PVC (DataVolume imported from the Fedora containerdisk) so the
+# backup performs a real CSI snapshot and therefore a real QGA fsfreeze — a
+# containerDisk-only VM has nothing to snapshot and may skip the freeze path.
+# Uses the cluster default StorageClass; add spec.storage.storageClassName if
+# you need a specific one.
+#
+# Guest prereq: qemu-guest-agent running. Fedora cloud images ship it; the
+# cloud-init below installs (no-op if present) and enables it. Verify before
+# backing up:  oc -n tvk-hook-seq-repro get vmi seq-probe -o yaml | grep -A2 AgentConnected
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tvk-hook-seq-repro
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: seq-probe
+  namespace: tvk-hook-seq-repro
+spec:
+  runStrategy: Always
+  dataVolumeTemplates:
+    - metadata:
+        name: seq-probe-root
+      spec:
+        storage:
+          resources:
+            requests:
+              storage: 10Gi
+        source:
+          registry:
+            url: docker://quay.io/containerdisks/fedora:latest
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: seq-probe
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        memory:
+          guest: 2Gi
+        devices:
+          disks:
+            - name: root
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: root
+          dataVolume:
+            name: seq-probe-root
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              password: probe
+              chpasswd: { expire: False }
+              packages:
+                - qemu-guest-agent
+              runcmd:
+                - systemctl enable --now qemu-guest-agent

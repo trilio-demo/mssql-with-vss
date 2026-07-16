@@ -1,0 +1,51 @@
+# BackupPlan for the sequencing probe.
+#
+# EDIT BEFORE APPLYING: point both target references at a Target that exists on
+# your cluster (any reachable S3/NFS target works — TVK auto-replicates Targets
+# into namespaces whose BackupPlans reference them, so a target in trilio-system
+# is fine as-is).
+#
+# The hook runs in the VM's virt-launcher `compute` container (where virsh and
+# the QGA socket live). podSelector must use the vm.kubevirt.io/name label —
+# kubevirt.io/domain does NOT appear on launcher pods.
+apiVersion: triliovault.trilio.io/v1
+kind: BackupPlan
+metadata:
+  name: seq-probe-backupplan
+  namespace: tvk-hook-seq-repro
+spec:
+  backupConfig:
+    target:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Target
+      name: REPLACE-ME            # <-- your Target name
+      namespace: trilio-system    # <-- your Target namespace
+  snapshotConfig:
+    target:
+      apiVersion: triliovault.trilio.io/v1
+      kind: Target
+      name: REPLACE-ME            # <-- your Target name
+      namespace: trilio-system    # <-- your Target namespace
+  hookConfig:
+    mode: Sequential
+    hooks:
+      - hook:
+          apiVersion: triliovault.trilio.io/v1
+          kind: Hook
+          name: seq-probe-hook
+          namespace: tvk-hook-seq-repro
+        podSelector:
+          labels:
+            - matchLabels:
+                vm.kubevirt.io/name: seq-probe
+        containerRegex: ^compute$
+  backupPlanComponents:
+    customSelector:
+      selectResources:
+        gvkSelector:
+          - groupVersionKind:
+              group: kubevirt.io
+              kind: VirtualMachine
+              version: v1
+            objects:
+              - seq-probe
