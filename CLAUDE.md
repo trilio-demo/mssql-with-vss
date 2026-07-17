@@ -212,8 +212,10 @@ environment.** They asked for the repo (already shared) + install guidance —
 the recipe docs are now serving engineering, not just the sales track. Docs
 verified self-sufficient for the SQL install; the one gap (`sqlcmd -C`
 unexplained / missing from § 6 verify commands) was baked same day.
-Remaining accelerator to offer them: golden-image access — decide GHCR
-read-PAT vs. making the `win2k25-golden` package public.
+Golden-image access decided (2026-07-17): **stays PAT-gated** — engineering
+has repo access and can set up their own GHCR read-PAT per
+`docs/ghcr-secret.example.yaml` + the prep docs. Handoff complete; nothing
+further owed to them.
 
 **Next session** — **Experiment 7 (TVK 5.4.0 S3-streaming comparison) is
 explicitly parked — Vince confirmed nothing to do here for a couple of
