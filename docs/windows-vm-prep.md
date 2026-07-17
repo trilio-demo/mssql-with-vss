@@ -698,11 +698,19 @@ Free, full-feature, non-production EULA. No license key, no activation.
 
    ```powershell
    # Default instance (MSSQLSERVER)
-   sqlcmd -S . -E -Q "SELECT @@VERSION;"
+   sqlcmd -S . -E -C -Q "SELECT @@VERSION;"
 
    # Named instance (e.g. MSSQLSERVER01)
-   sqlcmd -S .\MSSQLSERVER01 -E -Q "SELECT @@VERSION;"
+   sqlcmd -S .\MSSQLSERVER01 -E -C -Q "SELECT @@VERSION;"
    ```
+
+   The `-C` flag matters: modern `sqlcmd` (ODBC Driver 18 based) encrypts
+   connections by default and rejects SQL Server's self-signed certificate
+   with **"certificate chain was issued by an authority that is not
+   trusted"**. `-C` trusts the server certificate (the equivalent of
+   `TrustServerCertificate=yes` in connection strings). Older
+   `sqlcmd` builds ignore or don't have `-C` — drop it if yours rejects
+   the flag.
 
    Should return a Developer Edition banner. **If `sqlcmd -S .` returns
    "Login timeout expired" / "named pipes provider" error**, you almost
@@ -726,7 +734,7 @@ Free, full-feature, non-production EULA. No license key, no activation.
       worked for your cluster), and `ssh administrator@<vm-endpoint>` works
       from your workstation, landing in PowerShell.
 - [ ] `Get-Service SQLWriter` → `Running`.
-- [ ] `sqlcmd -S . -E -Q "SELECT @@VERSION;"` (or `-S .\<INSTANCE>` for a
+- [ ] `sqlcmd -S . -E -C -Q "SELECT @@VERSION;"` (or `-S .\<INSTANCE>` for a
       named instance) returns a Developer Edition banner.
 - [ ] Access path captured (direct? VPN? jump host?) and `~/.ssh/config`
       `ProxyJump` entry added if needed.

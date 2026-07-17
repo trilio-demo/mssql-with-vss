@@ -138,6 +138,10 @@ Open a `sqlcmd` session:
 sqlcmd -S .\MSSQLSERVER01 -E -C
 ```
 
+(`-C` trusts SQL Server's self-signed certificate — required with
+ODBC-18-based `sqlcmd`, which encrypts by default and otherwise fails
+with a certificate-chain error. See `docs/windows-vm-prep.md` § 6.)
+
 Run the setup SQL. Substitute your S3 credential details:
 
 ```sql

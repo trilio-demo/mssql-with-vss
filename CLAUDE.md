@@ -151,7 +151,7 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
   start lean without per-VM overrides. **Deferred — focus is now the MSSQL POC,
   not golden-image infra.** Specs landed in `docs/win2k25-vm-prep.md` +
   `docs/windows-vm-prep.md` (2026-06-19).
-- [ ] **Bake parked `docs/windows-vm-prep.md` updates** (carried from 2026-05-25/28): (a) ODBC 18 self-signed cert workaround (`sqlcmd -C` / `TrustServerCertificate=yes`); (b) CD-detach + data-disk `Initialize-Disk` post-install §; (c) SQL default-path relocation via `xp_instance_regwrite`; (d) `type: Location` Restore CR pattern + cross-NS NodePort collision footnote + Routes-via-BackupPlan plan; (e) `micro` editor scp-from-Mac note; SSMS still deferred.
+- [ ] **Bake parked `docs/windows-vm-prep.md` updates** (carried from 2026-05-25/28): ~~(a) ODBC 18 self-signed cert workaround~~ **DONE 2026-07-17** (`-C` added to § 6 verify commands + § 7 checklist, explained in both docs); (b)/(c) verified already covered — `Initialize-Disk` + CD-detach are in § 3/§ 4b + checklist, and § 6's installer-time `D:\MSSQL\*` data-dir guidance supersedes the `xp_instance_regwrite` relocation (still referenced in lab-guide troubleshooting for manual movers); (d) `type: Location` Restore CR pattern + cross-NS NodePort collision footnote + Routes-via-BackupPlan plan; (e) `micro` editor scp-from-Mac note; SSMS still deferred.
 - [ ] Bundle evidence in `output/` for the blog-writing agent (backup #1 packet copied 2026-05-25; restore-verification + FLR + load-test + MVP-validation packets still pending)
 - [ ] **Draft customer-facing technical response to the customer** — frame around the C+F MVP path (5-min RPO) with lab evidence citations + RPO/RTO positioning vs. crash-consistent baseline. Source material: `private-docs/research-tvk-mssql-vss-deep-dive.md`.
 - [x] Repo shipped (bootstrap step 13): **https://github.com/trilio-demo/mssql-with-vss** (public, 2026-05-24)
@@ -206,6 +206,14 @@ care about this story. Detail: `docs/session-state.md`.
 partner-led re-entry (see `CLAUDE.local.md`) — check whether it already
 happened / what came out of it, since this brief predates knowing the
 outcome.
+
+**Win (2026-07-17): engineering is adopting the MSSQL lab in their own
+environment.** They asked for the repo (already shared) + install guidance —
+the recipe docs are now serving engineering, not just the sales track. Docs
+verified self-sufficient for the SQL install; the one gap (`sqlcmd -C`
+unexplained / missing from § 6 verify commands) was baked same day.
+Remaining accelerator to offer them: golden-image access — decide GHCR
+read-PAT vs. making the `win2k25-golden` package public.
 
 **Next session** — **Experiment 7 (TVK 5.4.0 S3-streaming comparison) is
 explicitly parked — Vince confirmed nothing to do here for a couple of
