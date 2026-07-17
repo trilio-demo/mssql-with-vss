@@ -176,46 +176,32 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-07-16 — engineering handoff: repro kit shipped; RV finding corrected):**
-Engineering is duplicating the hook/QGA sequencing tests. Built + validated
-`repro/hook-sequencing/` — a **Windows-free minimal repro** (Fedora VM + probe
-Hook whose log is the pass/fail oracle, ~15 min end-to-end); validated live on
-the evidence cluster (POST hook saw `frozen`, guest-exec rejected, thaw waited
-<1 s after hook exit), then pushed (`b130d7d`), zipped + **attached to the
-hook-sequence JIRA** with a clarifying comment (quiesce doesn't fail — the
-freeze is *held*, silently degrading to crash-consistent past SQL's 60 s VSS
-timeout; backward-compat trade-off: reorder-thaw vs. a `postUnquiesce` hook
-point). **Do not reference the SA cluster in the ticket** — some engineers
-can't reach it. **Finding 3 OVERTURNED by marker test:** backups execute the
-LIVE Hook even with a stale RV pin; the real defect is audit-trail misreport
-(pin + `Backup.status.hookStatus` show a version that didn't run) — the 07-04
-"stale hook re-ran" was a misattribution (backup #5's post-re-pin failure was
-the tell). Vince dropped the RV topic from the JIRA. Repro ns torn down.
-**Vince committed (Slack) to verifying engineering's eventual fix against the
-Windows/MSSQL evidence VM.**
+**Last session (2026-07-17 — WIN: engineering adopting the MSSQL lab; doc
+handoff closed out):** Engineering wants to install MSSQL in their own
+environment — the recipe docs now serve engineering, not just the sales
+track. Decisions: **don't share `CLAUDE.local.md`** (after scrubbing, nothing
+transferable remains — everything they need is in the repo) and **golden
+image stays PAT-gated** (engineering self-serves the read-PAT per
+`docs/ghcr-secret.example.yaml`). Doc audit found + fixed the one gap:
+`sqlcmd -C` was unexplained in lab-guide and missing from prep-doc § 6 verify
+commands (fails on ODBC-18 `sqlcmd` fresh installs) — baked + pushed
+(`b84494c`, `2042883`). Parked prep-doc item (a) DONE, (b)/(c) verified
+already covered; only (d)/(e) remain. **Handoff complete; nothing further
+owed to engineering on this thread.**
 
-**Prior session (2026-07-07 through 07-12 — Experiments 5 & 6, both DONE):**
-Exp 5 (BitLocker/vTPM): TVK 5.3.1 unconditionally excludes the vTPM/EFI state
-PVC → every restore mints a new vTPM; escrowed recovery password is a full
-unlock. Confluence guide shared 07-08. Exp 6: plain hook-free freeze/thaw
-backup restores MSSQL fully working (fresh-write verified). A second
-MSSQL-interested prospect surfaced (see `CLAUDE.local.md`) — 2 customers now
-care about this story. Detail: `docs/session-state.md`.
+**Prior sessions:** 07-16 — hook-sequencing repro kit (Windows-free, Fedora +
+probe Hook) validated + attached to the hook-sequence JIRA; RV-pinning
+finding OVERTURNED (live Hook executes; defect is audit-trail misreport);
+Vince committed to verifying the eventual 5.4.0 fix on the evidence VM.
+07-07..12 — Exp 5 (vTPM/EFI PVC excluded by design; recovery password
+unlocks) + Exp 6 (plain freeze/thaw sufficient) both DONE; a second
+MSSQL-interested prospect surfaced — 2 customers now care about this story.
+Detail: `docs/session-state.md`.
 
 **Context for the week:** the **feature-readiness call (week of 07-06)** on the
 partner-led re-entry (see `CLAUDE.local.md`) — check whether it already
 happened / what came out of it, since this brief predates knowing the
 outcome.
-
-**Win (2026-07-17): engineering is adopting the MSSQL lab in their own
-environment.** They asked for the repo (already shared) + install guidance —
-the recipe docs are now serving engineering, not just the sales track. Docs
-verified self-sufficient for the SQL install; the one gap (`sqlcmd -C`
-unexplained / missing from § 6 verify commands) was baked same day.
-Golden-image access decided (2026-07-17): **stays PAT-gated** — engineering
-has repo access and can set up their own GHCR read-PAT per
-`docs/ghcr-secret.example.yaml` + the prep docs. Handoff complete; nothing
-further owed to them.
 
 **Next session** — **Experiment 7 (TVK 5.4.0 S3-streaming comparison) is
 explicitly parked — Vince confirmed nothing to do here for a couple of
