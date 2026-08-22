@@ -1,0 +1,59 @@
+# =============================================================================
+# CDI cross-namespace clone authorization
+# =============================================================================
+# The golden image lives in the BUILD namespace; lab VMs are cloned from it in
+# a DIFFERENT namespace. CDI refuses a cross-namespace clone unless the
+# *requesting* ServiceAccount holds `create` on the virtual subresource
+# `datavolumes/source` in the SOURCE namespace.
+#
+# The requester is NOT you. Even applying the VM as cluster-admin, KubeVirt's
+# virt-controller creates the dataVolumeTemplates as the **default
+# ServiceAccount of the VM's namespace**, so that is the subject to bind. The
+# failure is quiet -- the VM simply sits `Stopped` with no VMI, and the reason
+# is only visible in the VM's `Failure` condition:
+#
+#   oc get vm <vm> -n <ns> -o jsonpath='{.status.conditions[?(@.type=="Failure")].message}'
+#   -> not authorized to create DataVolume: User system:serviceaccount:<ns>:default
+#      has insufficient permissions in clone source namespace <build-ns>
+#
+# Verify with the SUBRESOURCE form -- `oc auth can-i create pvc/source` and
+# `datavolumes/source` as a single word both wrongly report "no":
+#   oc auth can-i create persistentvolumeclaims --subresource=source \
+#     -n <build-ns> --as=system:serviceaccount:<ns>:default
+#
+# Apply this BEFORE creating a VM that clones the golden. Repeat the
+# RoleBinding subject for each namespace that clones (e.g. restore targets).
+# =============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cdi-clone-source
+  namespace: win-golden-build          # SOURCE namespace (where the golden lives)
+rules:
+  # WHICH subresource CDI checks depends on the DataVolume's source type:
+  #   spec.source.pvc         -> persistentvolumeclaims/source   (what we use)
+  #   spec.source.dataSource  -> datavolumes/source
+  # Granting only `datavolumes/source` looks right, passes a casual
+  # `oc auth can-i` spot-check, and still fails a PVC-source clone with the
+  # identical "insufficient permissions in clone source namespace" message.
+  # Grant both so either source form works.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims/source"]
+    verbs: ["create"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes/source"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cdi-clone-source-mssql-vss-lab
+  namespace: win-golden-build          # binding lives in the SOURCE namespace
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cdi-clone-source
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: mssql-vss-lab           # the CLONING namespace

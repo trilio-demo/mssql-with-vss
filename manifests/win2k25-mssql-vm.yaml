@@ -1,0 +1,82 @@
+# =============================================================================
+# MSSQL/VSS lab VM — clone of the lean win2k25-v2 golden
+# =============================================================================
+# Rebuilds the lab's SQL Server host after the original cluster was lost.
+# Consumes the golden built by manifests/win2k25-golden-pipelinerun.yaml.
+#
+#   oc create configmap win2k25-mssql-sysprep -n mssql-vss-lab \
+#     --from-file=unattend.xml=docs/unattend.xml
+#   oc apply -f manifests/win2k25-mssql-vm.yaml
+#
+# First boot runs docs/unattend.xml FirstLogonCommands in order:
+#   1 data disk -> D: (NTFS, label DATA)   3 enable RDP
+#   2 edition-conversion fallback (NO-OP   4 NIC MTU 1400  <-- must precede 5
+#     here: that only fires on a           5 slmgr /ato (unlocks the full
+#     Datacenter *Eval* image; ours is         ~180-day eval; fails on MTU 1500)
+#     Standard, selected via /IMAGE/INDEX=2)
+#
+# Sizing (Vince, 2026-08-22): 1 vCPU / 4 Gi, 24 Gi root, 10 Gi data disk.
+#   * 24 Gi root: the lean 20 Gi golden lowers CDI's floor (a clone can never be
+#     smaller than the source's virtual size), so 24 Gi leaves ~4 Gi of headroom
+#     over the golden plus room for the SQL binaries on C:. Note this sits below
+#     Microsoft's *documented* 32 GB Windows Server minimum -- deliberate lab
+#     choice, not an oversight.
+#   * SQL data/log/backup files live on D:, not C: -- see docs/win2k25-vm-prep.md.
+# =============================================================================
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: win2k25-mssql
+  namespace: mssql-vss-lab
+spec:
+  runStrategy: Always
+  instancetype:
+    name: u1.medium                 # 1 vCPU / 4 Gi
+    kind: VirtualMachineClusterInstancetype
+  preference:
+    name: windows.2k25.virtio
+    kind: VirtualMachineClusterPreference
+  dataVolumeTemplates:
+    # Root: cross-namespace clone of the golden DV built by the pipeline.
+    - metadata:
+        name: win2k25-mssql-root
+      spec:
+        source:
+          pvc:
+            namespace: win-golden-build
+            name: win2k25-v2
+        storage:
+          storageClassName: ocs-storagecluster-ceph-rbd-virtualization
+          resources:
+            requests:
+              storage: 24Gi
+    # SQL data disk -> becomes D: via unattend FirstLogonCommands Order 1.
+    - metadata:
+        name: win2k25-mssql-data
+      spec:
+        source:
+          blank: {}
+        storage:
+          storageClassName: ocs-storagecluster-ceph-rbd-virtualization
+          resources:
+            requests:
+              storage: 10Gi
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: rootdisk
+              disk: { bus: virtio }
+            - name: datadisk
+              disk: { bus: virtio }
+            - name: sysprep
+              cdrom: { bus: sata }
+      volumes:
+        - name: rootdisk
+          dataVolume: { name: win2k25-mssql-root }
+        - name: datadisk
+          dataVolume: { name: win2k25-mssql-data }
+        - name: sysprep
+          sysprep:
+            configMap: { name: win2k25-mssql-sysprep }

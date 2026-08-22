@@ -281,7 +281,7 @@ The parameters that matter, and why:
   `/Image/Description`. Catch a stuck install fast with a screenshot instead of
   waiting out the timeout:
   ```bash
-  virtctl vnc screenshot <build-vm-name> -n "$NS" --output=/tmp/build.png
+  virtctl vnc screenshot <build-vm-name> -n "$NS" -f /tmp/build.png
   ```
   If a future ISO reorders indexes, confirm with
   `dism /Get-ImageInfo /ImageFile:<install.wim>` and adjust `/IMAGE/INDEX`.
