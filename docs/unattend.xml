@@ -308,6 +308,58 @@
 
         <!--
         ============================================================
+        Order 6 - Grow C: into the clone's free tail
+        ============================================================
+        A CDI clone provisioned on a LARGER root than the golden gets
+        the extra capacity as raw unallocated space at the end of the
+        disk. Windows does NOT extend C: into it automatically, so
+        without this the extra GB are simply invisible to the guest
+        (observed 2026-08-22: a 24 Gi clone of a 20 Gi golden sat at
+        C: 19.1 GB with 4 GB stranded).
+
+        This is a no-op when the clone root equals the golden size, so
+        it is safe to leave in unconditionally.
+
+        REQUIRES the golden image to have no trailing WinRE recovery
+        partition - otherwise the free space is not CONTIGUOUS with C:
+        and SizeMax comes back equal to the current size. The golden
+        build removes that partition (win2k25-golden-post-install.ps1).
+        ============================================================
+        -->
+        <SynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "$p = Get-Partition -DriveLetter C; $m = (Get-PartitionSupportedSize -DriveLetter C).SizeMax; if ($m -gt $p.Size) { Resize-Partition -DriveLetter C -Size $m }"</CommandLine>
+          <Description>Extend C: into any unallocated tail left by a larger clone root</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <!--
+        ============================================================
+        Order 7 - Restore automatic pagefile management
+        ============================================================
+        The golden image is built with the pagefile DISABLED so that no
+        multi-GB pagefile.sys is captured into it. That setting does NOT
+        reliably survive sysprep /generalize in the re-armed state: a
+        clone of the 2026-08-22 bake came up with
+        AutomaticManagedPagefile=False and no pagefile at all, which
+        SQL Server needs.
+
+        So the golden deliberately ships pagefile-less and the CLONE
+        turns management back on here. Windows creates the file on the
+        next boot, so the image stays lean while every clone gets a
+        properly sized pagefile. Do not remove this on the assumption
+        the golden re-arm works.
+        ============================================================
+        -->
+        <SynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "$cs = Get-CimInstance Win32_ComputerSystem; Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile=$true}"</CommandLine>
+          <Description>Re-enable automatic pagefile management (golden ships pagefile-less by design)</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <!--
+        ============================================================
         OpenSSH Server install is intentionally NOT done here.
         ============================================================
         An earlier revision had Orders 4-6 download OpenSSH-Win64.zip

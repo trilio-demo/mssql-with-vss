@@ -86,9 +86,12 @@ Remove-Item 'C:\Users\*\AppData\Local\Temp\*' -Recurse -Force -ErrorAction Silen
 Remove-Item 'C:\Windows\Logs\CBS\*' -Recurse -Force -ErrorAction SilentlyContinue
 Clear-RecycleBin -Force -ErrorAction SilentlyContinue
 
-# Re-arm AUTOMATIC pagefile management so CLONES get a proper pagefile (SQL
-# Server wants one). Windows creates the file at BOOT, not on this write, so
-# the captured image stays clean while every clone self-provisions one.
+# Re-arm AUTOMATIC pagefile management. NOTE: this write does NOT reliably
+# survive `sysprep /generalize` -- a clone of the 2026-08-22 bake came up with
+# AutomaticManagedPagefile=False and NO pagefile at all, which SQL Server needs.
+# So this is best-effort belt-and-braces only; the AUTHORITATIVE fix is
+# clone-side, in docs/unattend.xml FirstLogonCommands, which sets it via WMI on
+# first boot. Do not remove that step on the assumption this one works.
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v AutomaticManagedPagefile /t REG_DWORD /d 1 /f
 
 # TRIM: tell the virtio blk layer which blocks are free again, so they read as
@@ -96,14 +99,66 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management
 # the deletions above into an actually smaller image / backup.
 Optimize-Volume -DriveLetter C -ReTrim -ErrorAction SilentlyContinue
 
-# Leave a breadcrumb so a clone can confirm the slimming pass actually ran.
-$freeAfter = (Get-PSDrive C).Free
+# --- Remove the WinRE recovery partition so C: is the LAST partition -------
+# Windows Setup silently appends a ~789 MB Recovery partition AFTER the OS
+# partition, even though this answer file defines the layout explicitly. That
+# is fatal for a golden image: a clone provisioned on a BIGGER disk gets its
+# extra space as a tail BEYOND the recovery partition, so C: has no CONTIGUOUS
+# free space and can never be extended -- the extra capacity is stranded.
+# (Caught 2026-08-22: a 24 Gi clone of the 20 Gi golden stranded 4 GB, and
+# Get-PartitionSupportedSize reported max == current.)
+#
+# `reagentc /disable` first relocates winre.wim into C:\Windows\System32\Recovery,
+# so only the separate recovery PARTITION goes away.
+#
+# ⚠️ Implemented with diskpart, NOT the Storage module. `Get-Partition
+# -DiskNumber 0` was verified to return NOTHING in a non-interactive SYSTEM
+# context (2026-08-22) -- a Get-Partition-based version would silently no-op
+# and cost a whole rebake to discover. diskpart is a standalone binary and was
+# verified working in the same context. `delete partition override` is also
+# mandatory: recovery partitions are protected and a plain delete refuses.
+reagentc.exe /disable 2>&1 | Out-Null
+
+$lp = "select disk 0" + [char]13 + [char]10 + "list partition"
+$lp | Out-File -FilePath 'C:\Windows\Temp\lp.txt' -Encoding ascii
+$parts = & diskpart.exe /s 'C:\Windows\Temp\lp.txt'
+$recNums = @($parts | Select-String -Pattern '^\s*Partition\s+(\d+)\s+Recovery' |
+             ForEach-Object { $_.Matches[0].Groups[1].Value })
+foreach ($n in $recNums) {
+  ("select disk 0" + [char]13 + [char]10 + "select partition " + $n + [char]13 + [char]10 + "delete partition override") |
+    Out-File -FilePath 'C:\Windows\Temp\delrec.txt' -Encoding ascii
+  & diskpart.exe /s 'C:\Windows\Temp\delrec.txt' | Out-Null
+}
+
+# `reagentc /disable` RELOCATES winre.wim (~500 MB) onto C: rather than
+# discarding it, which would quietly eat much of the space just reclaimed. A
+# lab clone has no use for the recovery environment, so drop the image too.
+Remove-Item 'C:\Windows\System32\Recovery\Winre.wim' -Force -ErrorAction SilentlyContinue
+
+# Re-list to confirm the removal actually happened (for the report below).
+$lp | Out-File -FilePath 'C:\Windows\Temp\lp.txt' -Encoding ascii
+$partsAfter = & diskpart.exe /s 'C:\Windows\Temp\lp.txt'
+$recLeft = @($partsAfter | Select-String -Pattern '^\s*Partition\s+\d+\s+Recovery').Count
+Remove-Item 'C:\Windows\Temp\lp.txt','C:\Windows\Temp\delrec.txt' -Force -ErrorAction SilentlyContinue
+
+# NOTE: C: is deliberately NOT extended here. The golden stays sized to the
+# build disk; each CLONE extends C: into its own free tail on first boot
+# (docs/unattend.xml FirstLogonCommands). One golden then serves any clone size.
+
+# Breadcrumb so a clone can confirm this pass ran. Records ABSOLUTE facts, not
+# a free-space delta: the biggest saving -- never creating a pagefile -- happens
+# back in the `specialize` pass, before this script starts measuring, so a delta
+# reads as "~0 reclaimed" even when everything worked.
+$c = Get-PSDrive C
 @(
   "golden build: win2k25 (Server 2025 Standard, Desktop Experience)"
-  "slimming pass ran: $(Get-Date -Format s)"
-  "C: free before = $([math]::Round($freeBefore/1GB,2)) GiB"
-  "C: free after  = $([math]::Round($freeAfter /1GB,2)) GiB"
-  "reclaimed      = $([math]::Round(($freeAfter-$freeBefore)/1GB,2)) GiB"
+  "slimming pass ran  : $(Get-Date -Format s)"
+  "C: size            = $([math]::Round(($c.Used + $c.Free)/1GB,2)) GiB"
+  "C: used            = $([math]::Round($c.Used/1GB,2)) GiB"
+  "C: free            = $([math]::Round($c.Free/1GB,2)) GiB"
+  "pagefile.sys       = $(if (Test-Path 'C:\pagefile.sys') { 'PRESENT - slimming FAILED' } else { 'absent - correct' })"
+  "recovery partitions= $recLeft (expected 0)"
+  "recovery removed   = $($recNums.Count)"
 ) | Set-Content -Path 'C:\golden-build-report.txt' -Encoding ASCII
 
 # --- Host-key wipe (each clone MUST generate unique SSH host keys) --------
