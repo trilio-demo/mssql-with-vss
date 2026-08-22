@@ -168,6 +168,81 @@ $pf = (Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue |
   "recovery removed   = $($recNums.Count)"
 ) | Set-Content -Path 'C:\golden-build-report.txt' -Encoding ASCII
 
+# =========================================================================
+# SetupComplete.cmd -- make the golden self-sufficient for UI-created VMs
+# =========================================================================
+# Windows Setup runs C:\Windows\Setup\Scripts\SetupComplete.cmd as SYSTEM on
+# the CLONE's first boot, before any logon, and INDEPENDENTLY of any
+# unattend.xml. It is a file on disk, so unlike a registry write in audit mode
+# it is not undone by sysprep /generalize.
+#
+# WHY THIS EXISTS: docs/unattend.xml only runs when someone attaches it as a
+# sysprep volume. A VM created through the OpenShift console does NOT get it,
+# and the resulting VM looks perfectly healthy while being quietly broken --
+# most seriously with NO PAGEFILE AT ALL, because this image ships
+# pagefile-less by design (see the specialize pass). Measured cost of that on a
+# 4 GiB VM: the commit limit drops from 5437 MB to 4029 MB (-26%) and crash
+# dumps stop working entirely (CrashDumpEnabled=7 writes the dump INTO the
+# pagefile; with none and no DedicatedDumpFile there is no dump).
+#
+# WHY NOT JUST BAKE A PAGEFILE: pagefile.sys is volatile scratch with no value
+# across a reboot, let alone across an image capture. Baking it would add
+# ~2.8 GB (the 8 GiB build VM's automatic size) to the golden, to the
+# containerDisk push, to every clone, and to EVERY TRILIO BACKUP of every
+# clone -- and the clone would resize/regenerate it on first boot anyway.
+# ~1 KB of script buys the same outcome.
+#
+# SCOPE: deliberately limited to things that are universally correct, safe to
+# repeat, and fail INVISIBLY when missing. Data-disk initialization and RDP
+# stay in unattend.xml -- auto-formatting any RAW disk found on a VM is too
+# aggressive to bake into a shared image, and enabling RDP is a policy choice.
+# Duplication with unattend.xml Orders 4-7 is intentional and harmless: every
+# action here is idempotent, so a VM built either way converges on the same
+# state.
+#
+# MUST NEVER BLOCK SETUP -- everything is logged and swallowed, exit 0 always.
+$setupComplete = @'
+@echo off
+REM Baked into the win2k25 golden image. Runs once, as SYSTEM, on first boot
+REM of a clone -- with or without an unattend.xml attached.
+REM Log: C:\Windows\Temp\setupcomplete.log
+set LOG=C:\Windows\Temp\setupcomplete.log
+echo [%DATE% %TIME%] SetupComplete starting >> "%LOG%" 2>&1
+
+REM --- 1. NIC MTU 1400 -- MUST precede activation ------------------------
+REM Windows ignores the DHCP-advertised MTU and stays at 1500. On a 1400 OVN
+REM overlay that black-holes large HTTPS transfers, so slmgr /ato below fails
+REM with 0x80072EE2 and the clone silently keeps the 10-day grace period.
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent >> "%LOG%" 2>&1
+
+REM --- 2. Re-enable automatic pagefile management -------------------------
+REM The image ships pagefile-less on purpose. Windows creates the file at the
+REM NEXT boot, not on this write, so the image stays lean either way.
+powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$cs = Get-CimInstance Win32_ComputerSystem; Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile=$true}" >> "%LOG%" 2>&1
+
+REM --- 3. Extend C: into any unallocated tail -----------------------------
+REM A clone on a larger root than the golden gets the extra space as a raw
+REM tail; Windows never claims it automatically. `extend` with no size takes
+REM all CONTIGUOUS free space -- which only exists because the bake removed
+REM the trailing WinRE recovery partition. diskpart is used rather than
+REM Resize-Partition: Get-Partition -DiskNumber returns nothing in this
+REM non-interactive SYSTEM context. No-op when clone size == golden size.
+>C:\Windows\Temp\ext.txt echo select volume c
+>>C:\Windows\Temp\ext.txt echo extend
+diskpart /s C:\Windows\Temp\ext.txt >> "%LOG%" 2>&1
+del /q C:\Windows\Temp\ext.txt
+
+REM --- 4. Activate the evaluation ----------------------------------------
+REM Unlocks the full ~180-day eval. Without it the clone sits on the 10-day
+REM activate-by deadline. Harmless no-op where *.sls.microsoft.com is blocked.
+cscript //nologo C:\Windows\System32\slmgr.vbs /ato >> "%LOG%" 2>&1
+
+echo [%DATE% %TIME%] SetupComplete finished >> "%LOG%" 2>&1
+exit /b 0
+'@
+New-Item -Path 'C:\Windows\Setup\Scripts' -ItemType Directory -Force | Out-Null
+Set-Content -Path 'C:\Windows\Setup\Scripts\SetupComplete.cmd' -Value $setupComplete -Encoding ASCII
+
 # --- Host-key wipe (each clone MUST generate unique SSH host keys) --------
 # install-sshd.ps1 / any sshd start can create keys in C:\ProgramData\ssh.
 # Captured into the image, every clone would share them. Last chance before
