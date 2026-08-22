@@ -1,0 +1,102 @@
+# =============================================================================
+# Windows Server 2025 golden-image build -- "v2" lean bake
+# =============================================================================
+# Replaces the console PipelineRun form used for the 2026-06 build, so the run
+# is reproducible and reviewable in git instead of being retyped each rebake.
+#
+# Pipeline comes from the Red Hat Tekton catalog via the hub resolver. Pin the
+# version to the cluster's OpenShift Virtualization version (4.22.6 here) --
+# the pipeline's internal taskRefs are pinned to the matching v4.22.6 tasks.
+#
+# Launch (the ISO URL is short-lived / session-tokenized, so it is NOT committed):
+#     export WIN2K25_ISO_URL='<current Server 2025 eval ISO URL>'
+#     envsubst < manifests/win2k25-golden-pipelinerun.yaml | oc create -f -
+#     tkn pipelinerun logs -f -n win-golden-build   # or watch in the console
+#
+# Prerequisites on the build cluster (all verified 2026-08-22 on the current build cluster):
+#   1. OpenShift Pipelines operator installed.
+#   2. ConfigMap built FROM THE REPO SOURCE FILES -- re-run after ANY edit to
+#      docs/win2k25-golden-autounattend.xml or docs/win2k25-golden-post-install.ps1,
+#      because the pipeline reads the ConfigMap, not your working tree:
+#        oc create configmap windows2k25-autounattend-golden \
+#          --from-file=autounattend.xml=docs/win2k25-golden-autounattend.xml \
+#          --from-file=post-install.ps1=docs/win2k25-golden-post-install.ps1 \
+#          -n win-golden-build --dry-run=client -o yaml | oc apply -f -
+#   3. Namespace `admin` on the `pipeline` SA (namespace-scoped is sufficient --
+#      cluster-admin is NOT needed; all task steps are restricted-SCC clean):
+#        oc adm policy add-role-to-user admin -z pipeline -n win-golden-build
+#   4. spec.storage.vmStateStorageClass set on the HyperConverged CR. The
+#      windows.2k25* preferences request a PERSISTENT vTPM, which needs backend
+#      storage or the build VM never starts. NOTE: on HCO v1 (OCPv 4.22) this
+#      field moved to spec.storage.vmStateStorageClass -- the old top-level
+#      spec.vmStateStorageClass is silently pruned with an "unknown field" warning.
+#
+# Sizing notes -- this is the "lean" bake:
+#   * Root disk is 20Gi, HARDCODED in the pipeline's create-vm-root-disk task.
+#     There is NO parameter for it. If a different size is ever needed, the
+#     pipeline has to be vendored locally and edited.
+#   * Slimming happens in the answer files, not here: the specialize pass
+#     disables the pagefile and post-install.ps1 deletes it + runs DISM
+#     /ResetBase + purges caches + TRIMs. See those files for the why.
+#   * instanceTypeName is the BUILD VM size AND gets baked onto the resulting
+#     DataVolume/DataSource as the default instancetype for every clone. We
+#     build at u1.large (2 vCPU / 8Gi) for build speed, then relabel the
+#     DataSource/DV to the lean u1.medium (1 vCPU / 4Gi) clone default
+#     afterwards -- building at u1.medium risks the 2h wait-for-vmi-status
+#     timeout because DISM /ResetBase is slow on 1 vCPU.
+#
+# virtioContainerDiskName is deliberately omitted: the pipeline default is
+# byte-identical to this cluster's virtio-win image (verified via the
+# virtio-win ConfigMap in openshift-cnv), so pinning it here would only rot.
+# =============================================================================
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: win2k25-golden-v2-
+  namespace: win-golden-build
+spec:
+  # The pipeline's own wait-for-vmi-status task allows 2h for the Windows
+  # install + audit-mode customize + slimming + generalize. Give the overall
+  # run headroom beyond that.
+  timeouts:
+    pipeline: 3h0m0s
+  taskRunTemplate:
+    serviceAccountName: pipeline
+  pipelineRef:
+    resolver: hub
+    params:
+      - name: catalog
+        value: redhat-pipelines
+      - name: type
+        value: artifact
+      - name: kind
+        value: pipeline
+      - name: name
+        value: windows-efi-installer
+      - name: version
+        value: "4.22.6"
+  params:
+    # Short-lived Microsoft eval-center URL -- injected via envsubst, never committed.
+    - name: winImageDownloadURL
+      value: "${WIN2K25_ISO_URL}"
+    # Gates the whole run: task 1 hard-exits unless this is non-empty.
+    - name: acceptEula
+      value: "true"
+    # OUR answer files (built from the repo), not the stock windows2k25 ConfigMap.
+    - name: autounattendConfigMapName
+      value: windows2k25-autounattend-golden
+    # Build-VM size; relabelled to u1.medium on the output DataSource afterwards.
+    - name: instanceTypeName
+      value: u1.large
+    # Must be the 2025 preference -- the pipeline default is windows.11.virtio.
+    - name: preferenceName
+      value: windows.2k25.virtio
+    # Fresh name so a prior golden is never overwritten by a rebake.
+    - name: baseDvName
+      value: win2k25-v2
+    - name: isoDVName
+      value: win2k25-iso
+    # UEFI, so the modify-windows-iso-file task must run (strips the
+    # "press any key to boot" prompt). Only set true for legacy-BIOS preferences.
+    - name: useBiosMode
+      value: "false"

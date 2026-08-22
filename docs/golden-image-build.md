@@ -91,14 +91,48 @@ Everything here lands in the image:
 
 ## Build procedure (configmap + pipeline)
 
-Run on a cluster with the **OpenShift Pipelines** operator and the
-**`redhat-pipelines`** Tekton Hub catalog enabled. Pick a build namespace:
+Run on a cluster with the **OpenShift Pipelines** operator. Pick a build namespace:
 
 ```bash
 NS=win-golden-build
+oc create namespace "$NS"
 ```
 
-### 1. Build the answer-file ConfigMap
+> **⚠️ Where the pipeline comes from changed.** Older OpenShift Virtualization
+> shipped the KubeVirt Tekton tasks/pipelines into the cluster (via the SSP
+> operator / a `deployTektonTaskResources` HCO feature gate). **OCPv 4.22 has
+> dropped that integration entirely** — there is no such feature gate, SSP
+> deploys nothing Tekton-related, and `oc get pipeline -A` shows only the stock
+> s2i/buildah pipelines. The `windows-efi-installer` pipeline is now pulled at
+> run time from the **`redhat-pipelines` ArtifactHub catalog** through the Tekton
+> **hub resolver**. Pin the version to the cluster's OCPv version — the
+> pipeline's internal `taskRef`s are pinned to the matching `v<x.y.z>` tasks, so
+> mixing versions is asking for trouble.
+
+### 1. Install the OpenShift Pipelines operator
+
+```bash
+oc apply -f - <<'EOF'
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-pipelines-operator-rh
+  namespace: openshift-operators
+spec:
+  channel: latest
+  name: openshift-pipelines-operator-rh
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
+EOF
+
+# wait for the operator AND for TektonConfig to go Ready (it lags the CSV by
+# a few minutes while it lays down the per-namespace `pipeline` ServiceAccount)
+oc get csv -n openshift-operators | grep pipelines
+oc get tektonconfig config
+```
+
+### 2. Build the answer-file ConfigMap
 
 The pipeline mounts this ConfigMap as the sysprep CD (drive `F:`). It needs
 **both** keys — `autounattend.xml` and `post-install.ps1` — keyed exactly so
@@ -116,28 +150,123 @@ oc create configmap windows2k25-autounattend-golden \
 > pipeline. (Editing the file on your Mac alone changes nothing — the pipeline
 > reads the ConfigMap, not your working tree.)
 
-### 2. Run the `windows-efi-installer` pipeline
+### 3. Grant the `pipeline` ServiceAccount namespace `admin`
 
-Easiest from the console: **Pipelines → Pipelines → Create → from the
-`redhat-pipelines` catalog → `windows-efi-installer`** (lab used **v4.21.0**,
-resolved via the hub resolver; bump the PipelineRun timeout to ~**2h**). The
-PipelineRun form prompts for parameters; the ones that matter (names may vary
-slightly by pipeline version — map by function):
+Because the tasks now come from ArtifactHub as bare `Task` objects, **no RBAC
+comes with them** — you supply it. Namespace-scoped `admin` is enough; it picks
+up the aggregated KubeVirt/CDI rules, so the SA can create DataVolumes,
+DataSources, VirtualMachines and VMIs:
 
-| Parameter (function) | Value |
+```bash
+oc adm policy add-role-to-user admin -z pipeline -n "$NS"
+```
+
+**`cluster-admin` is not needed** — don't grant it. Every step in every task
+runs `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, all capabilities
+dropped, so the default **restricted** SCC is sufficient too (the libguestfs
+`modify-windows-iso-file` steps included).
+
+### 4. Set `vmStateStorageClass` — or the build VM never starts
+
+The `windows.2k25` **and** `windows.2k25.virtio` cluster preferences both
+request a **persistent vTPM** (`preferredTPM: {persistent: true}`). Persistent
+vTPM state needs KubeVirt *backend storage*, which needs a storage class
+configured on the HyperConverged CR. Without it the VM cannot start and the
+build dies in `wait-for-vmi-status` with nothing obvious in the pipeline logs.
+
+```bash
+oc patch hyperconverged kubevirt-hyperconverged -n openshift-cnv --type=merge \
+  -p '{"spec":{"storage":{"vmStateStorageClass":"<an-sc-supporting-RWO-Filesystem>"}}}'
+```
+
+> **⚠️ The field moved.** On the HCO **`v1`** API (OCPv 4.22) it is
+> `spec.storage.vmStateStorageClass`. The old `v1beta1` top-level
+> `spec.vmStateStorageClass` is **silently pruned** — you get a
+> `Warning: unknown field "spec.vmStateStorageClass"` and `patched`, the patch
+> appears to succeed, and the value is simply not there. Always read the field
+> back, and confirm it propagated to the KubeVirt CR:
+> ```bash
+> oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+>   -o jsonpath='{.spec.storage.vmStateStorageClass}{"\n"}'
+> oc get kubevirt kubevirt-kubevirt-hyperconverged -n openshift-cnv \
+>   -o jsonpath='{.spec.configuration.vmStateStorageClass}{"\n"}'
+> ```
+>
+> Note this also means **every clone gets a persistent vTPM PVC**
+> (`persistent-state-for-<vm>`). That is fine — but it is exactly the PVC TVK
+> excludes from backup by design, so a restored clone always gets a *fresh*
+> vTPM. Harmless unless something is sealed to it (see
+> [`exp5-tpm-bitlocker.md`](exp5-tpm-bitlocker.md)).
+
+### 5. Check the build's egress dependencies
+
+Three off-cluster fetches must work, or the run fails early and confusingly.
+Test them from a pod on the build cluster, not from your Mac:
+
+| Host | Needed by |
 |---|---|
-| Autounattend ConfigMap name | **`windows2k25-autounattend-golden`** (from step 1) |
-| Windows ISO download URL | a **current Server 2025 eval ISO** URL |
-| virtio container-disk image | the cluster's virtio-win containerDisk |
-| Output base DataVolume name | **`win2k25`** |
-| Preference / instance type | Windows 2025 / a sane default (e.g. `u1.large`) |
-| Target DV size / StorageClass | ≥ 21 Gi on a working SC (Block/RWX ideal) |
+| `artifacthub.io` | the **hub resolver**, to fetch the pipeline + every task |
+| `raw.githubusercontent.com` | task 1 `import-autounattend-configmaps` (it `curl`s the stock ConfigMap YAML and `oc apply`s it — this happens even though we override `autounattendConfigMapName`, because the EULA gate lives in that task) |
+| Microsoft's download CDN | task 2 `import-win-iso` |
 
-The pipeline boots the ISO into an installer VM, runs the answer file +
-post-install, generalizes, shuts down, and captures the result into the
-`win2k25` DataVolume.
+```bash
+oc run egress-check -n "$NS" --restart=Never --rm -i \
+  --image=registry.access.redhat.com/ubi9/ubi-minimal:latest \
+  --command -- /bin/bash -c 'for u in \
+      https://artifacthub.io/api/v1/packages/tekton-pipeline/redhat-pipelines/windows-efi-installer/4.22.6 \
+      https://raw.githubusercontent.com/kubevirt/kubevirt-tekton-tasks/main/release/pipelines/windows-efi-installer/configmaps/windows-efi-installer-configmaps.yaml \
+      ; do echo "$(curl -s -o /dev/null -w %{http_code} -L --max-time 25 $u) <- $u"; done'
+```
 
-### 3. Monitor — and the two hangs you will hit
+### 6. Launch the run from the committed PipelineRun
+
+Use [`../manifests/win2k25-golden-pipelinerun.yaml`](../manifests/win2k25-golden-pipelinerun.yaml)
+rather than retyping the console form — it carries the version pin, the
+parameter choices and the reasoning:
+
+```bash
+export WIN2K25_ISO_URL='<current Server 2025 eval ISO URL>'   # short-lived, never committed
+envsubst < manifests/win2k25-golden-pipelinerun.yaml | oc create -f -
+tkn pipelinerun logs -f -n "$NS"
+```
+
+The parameters that matter, and why:
+
+| Parameter | Value | Why |
+|---|---|---|
+| `winImageDownloadURL` | current Server 2025 eval ISO | Eval-center links are short-lived/tokenized — inject, don't commit. |
+| `acceptEula` | `"true"` | Task 1 hard-exits if empty. |
+| `autounattendConfigMapName` | `windows2k25-autounattend-golden` | **Our** answer files, not the stock 2025 ConfigMap. |
+| `preferenceName` | `windows.2k25.virtio` | The pipeline default is `windows.11.virtio` — always override. |
+| `instanceTypeName` | `u1.large` | See the build-vs-clone size trap below. |
+| `baseDvName` | a **fresh** name (e.g. `win2k25-v2`) | Never overwrite a known-good golden on a rebake. |
+| `useBiosMode` | `"false"` | UEFI, so `modify-windows-iso-file` runs and strips the "press any key to boot" prompt. |
+| `virtioContainerDiskName` | *omit* | The pipeline default matched this cluster's `virtio-win` ConfigMap image byte-for-byte; pinning it here only rots. |
+
+**Two things you cannot set as parameters:**
+
+- **The root disk is hardcoded at `20Gi`** inside the pipeline's
+  `create-vm-root-disk` task manifest. There is no parameter for it. (Conveniently
+  that *is* the lean target.) To build any other size you must vendor the
+  pipeline locally and edit it.
+- **The StorageClass** — the root DV carries no `storageClassName`, so it lands
+  on the cluster's default (or default-virt) class.
+
+> **⚠️ The build-vs-clone size trap.** `instanceTypeName` and `preferenceName`
+> are used for the *build VM* **and** are stamped onto the output
+> DataVolume/DataSource as `instancetype.kubevirt.io/default-instancetype` /
+> `default-preference` — i.e. they become the **default size of every clone**.
+> These two wants conflict: the build wants CPU (DISM `/ResetBase` is slow), the
+> clone wants to be lean. Resolve it by **building at `u1.large` and relabelling
+> afterwards**, rather than building at 1 vCPU and risking the 2h
+> `wait-for-vmi-status` timeout:
+> ```bash
+> for o in datavolume/win2k25-v2 datasource/win2k25-v2; do
+>   oc label -n "$NS" $o instancetype.kubevirt.io/default-instancetype=u1.medium --overwrite
+> done
+> ```
+
+### 7. Monitor — and the two hangs you will hit
 
 - **`wait-for-vmi-status` task hangs** after the build VM should have powered
   off (VMI finalizers don't release). Clear it by force-deleting the launcher
@@ -157,12 +286,37 @@ post-install, generalizes, shuts down, and captures the result into the
   If a future ISO reorders indexes, confirm with
   `dism /Get-ImageInfo /ImageFile:<install.wim>` and adjust `/IMAGE/INDEX`.
 
-### 4. Output
+### 8. Output
 
-A generalized, **unactivated** `win2k25` DataVolume — the golden master. Verify
-it on a test clone (below), then distribute it.
+A generalized, **unactivated** DataVolume — the golden master — plus a
+same-named DataSource carrying the default instancetype/preference labels.
+Verify it on a test clone (below), then distribute it.
 
 ---
+
+## Image slimming — why it is split across two passes
+
+Every byte in the golden image is paid for **four times**: the golden DV, the
+containerDisk push/pull, every clone's root disk, and **every Trilio backup of
+every clone**. (For scale: the 2026-05 golden backed up at 17.85 GiB in 7m52s,
+and backup wall-time on this lab is data-transfer-bound.) So the bake trims
+itself — but the trim cannot all happen in one place:
+
+| Where | What | Why it has to be there |
+|---|---|---|
+| `win2k25-golden-autounattend.xml`, **`specialize`** pass | registry writes: `AutomaticManagedPagefile=0` + empty `PagingFiles` | An **active pagefile cannot be deleted**, and disabling one only takes effect after a reboot. Windows Setup reboots between `specialize` → `oobeSystem`(Reseal=Audit) → audit mode, so this borrows a reboot that already exists. Doing it in `post-install.ps1` would be too late — the file would still be in use. |
+| `win2k25-golden-post-install.ps1`, **audit** mode | delete `pagefile.sys`/`swapfile.sys`, `powercfg /hibernate off`, DISM `/StartComponentCleanup /ResetBase`, purge `SoftwareDistribution\Download` + temp + CBS logs + recycle bin, **re-arm** `AutomaticManagedPagefile=1`, `Optimize-Volume -ReTrim` | By now the pagefile is released and deletable. `ReTrim` is what makes the deletions *real* — it tells the virtio blk layer those blocks are free, so they read as unallocated in the captured disk instead of as stale data. |
+
+Two details worth not breaking:
+
+- **Re-arming the pagefile matters.** `AutomaticManagedPagefile` goes back to `1`
+  at the end of audit mode so **clones** get a proper pagefile (SQL Server wants
+  one). Windows creates the file at *boot*, not on that registry write, so the
+  captured image stays clean while every clone self-provisions one.
+- `post-install.ps1` writes **`C:\golden-build-report.txt`** with C: free space
+  before/after. Check it on a test clone to confirm the slimming pass actually
+  ran, instead of inferring it from disk size.
+
 
 ## Build-breakers learned the hard way (do NOT reintroduce)
 
@@ -174,6 +328,10 @@ it on a test clone (below), then distribute it.
 | Treating the 10-day clock as the eval length | Wasted effort chasing licensed ISOs / `slmgr /rearm` | It's the **activate-by** deadline; `slmgr /ato` unlocks ~180 days. |
 | Starting sshd during the build without wiping host keys | Every clone ships identical SSH host keys | Set sshd `Automatic` but don't start it; **wipe `C:\ProgramData\ssh\ssh_host_*`** before generalize. |
 | Large download before setting MTU | Stalls/timeouts that look like an egress block | Set NIC **MTU 1400 first** (already first in `post-install.ps1`). |
+| Expecting OpenShift Virtualization to ship the Tekton pipeline (hunting a `deployTektonTaskResources` HCO feature gate) | **OCPv 4.22 removed the SSP/Tekton integration** — the gate does not exist, SSP deploys nothing, and `oc get pipeline -A` shows only stock s2i/buildah pipelines. Easy to misread as a broken install | Pull `windows-efi-installer` from the **`redhat-pipelines` ArtifactHub catalog via the hub resolver**, pinned to the cluster's OCPv version (its internal `taskRef`s are pinned to matching `v<x.y.z>` tasks). |
+| Patching `spec.vmStateStorageClass` on the HyperConverged CR | On the HCO **`v1`** API the field moved under `spec.storage`. The old top-level path is **silently pruned**: you get `Warning: unknown field` *and* `patched`, so it looks like it worked while the value is absent — then the build dies in `wait-for-vmi-status` because the persistent-vTPM VM can't start | Patch **`spec.storage.vmStateStorageClass`**, then **read it back** and confirm it reached the KubeVirt CR's `spec.configuration.vmStateStorageClass`. |
+| Building at the lean clone instancetype (e.g. `u1.medium`) to get a lean clone default | `instanceTypeName` sizes the **build VM** *and* is stamped on the output DV/DataSource as every clone's default. At 1 vCPU, DISM `/ResetBase` + the Windows install can approach the 2h `wait-for-vmi-status` timeout — a 2h build lost to save two `oc label` calls | Build at **`u1.large`**, then **relabel** the DataVolume + DataSource `instancetype.kubevirt.io/default-instancetype=u1.medium`. |
+| Granting the `pipeline` ServiceAccount `cluster-admin` | Unnecessary cluster-wide privilege; also masks which permissions the run actually needs | Namespace **`admin`** is sufficient (it picks up the aggregated KubeVirt/CDI rules). Every task step is `runAsNonRoot` with all caps dropped, so the **restricted** SCC works too. |
 
 ---
 

@@ -51,6 +51,61 @@ New-Item -Path 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell `
   -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force
 
+# =========================================================================
+# Image slimming (part 2 of 2) -- shrink what gets captured into the golden
+# =========================================================================
+# Part 1 ran in the `specialize` pass of win2k25-golden-autounattend.xml: it
+# disabled the pagefile via the registry. Windows Setup then rebooted twice
+# (specialize -> oobeSystem/Reseal=Audit -> audit mode), which RELEASED
+# pagefile.sys -- an active pagefile cannot be deleted, which is why the
+# disable has to happen a pass earlier than this script.
+#
+# Why bother: every byte here is paid for FOUR times -- the golden DV, the
+# containerDisk push/pull to the registry, every clone's root disk, and every
+# Trilio backup of every clone. The 2026-05 golden (~21 Gi virtual) backed up
+# at 17.85 GiB / 7m52s; a RAM-sized pagefile was a large chunk of that.
+
+$freeBefore = (Get-PSDrive C).Free
+
+# Hibernation: deletes hiberfil.sys IMMEDIATELY (no reboot needed). Server
+# SKUs often ship with hibernation already off -- then this is a harmless no-op.
+powercfg.exe /hibernate off 2>&1 | Out-Null
+
+# The now-released pagefile (and the compressed-memory swapfile).
+Remove-Item 'C:\pagefile.sys','C:\swapfile.sys' -Force -ErrorAction SilentlyContinue
+
+# WinSxS component store: drop superseded components. /ResetBase makes the
+# installed updates non-uninstallable -- fine for a disposable lab golden.
+Dism.exe /Online /Cleanup-Image /StartComponentCleanup /ResetBase /Quiet /NoRestart
+
+# Transient caches that have no business being in a golden image.
+Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
+Remove-Item 'C:\Windows\SoftwareDistribution\Download\*' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item 'C:\Windows\Temp\*' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item 'C:\Users\*\AppData\Local\Temp\*' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item 'C:\Windows\Logs\CBS\*' -Recurse -Force -ErrorAction SilentlyContinue
+Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+
+# Re-arm AUTOMATIC pagefile management so CLONES get a proper pagefile (SQL
+# Server wants one). Windows creates the file at BOOT, not on this write, so
+# the captured image stays clean while every clone self-provisions one.
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v AutomaticManagedPagefile /t REG_DWORD /d 1 /f
+
+# TRIM: tell the virtio blk layer which blocks are free again, so they read as
+# unallocated in the captured disk instead of as stale data. This is what turns
+# the deletions above into an actually smaller image / backup.
+Optimize-Volume -DriveLetter C -ReTrim -ErrorAction SilentlyContinue
+
+# Leave a breadcrumb so a clone can confirm the slimming pass actually ran.
+$freeAfter = (Get-PSDrive C).Free
+@(
+  "golden build: win2k25 (Server 2025 Standard, Desktop Experience)"
+  "slimming pass ran: $(Get-Date -Format s)"
+  "C: free before = $([math]::Round($freeBefore/1GB,2)) GiB"
+  "C: free after  = $([math]::Round($freeAfter /1GB,2)) GiB"
+  "reclaimed      = $([math]::Round(($freeAfter-$freeBefore)/1GB,2)) GiB"
+) | Set-Content -Path 'C:\golden-build-report.txt' -Encoding ASCII
+
 # --- Host-key wipe (each clone MUST generate unique SSH host keys) --------
 # install-sshd.ps1 / any sshd start can create keys in C:\ProgramData\ssh.
 # Captured into the image, every clone would share them. Last chance before

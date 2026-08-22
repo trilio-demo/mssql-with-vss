@@ -90,6 +90,30 @@
       <UILanguage>en-US</UILanguage>
       <UserLocale>en-US</UserLocale>
     </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <!-- Image slimming, part 1 of 2: turn the pagefile OFF here, in specialize.
+           WHY HERE and not in post-install.ps1: an ACTIVE pagefile cannot be
+           deleted, and disabling it only takes effect after a reboot. Windows
+           Setup reboots between specialize -> oobeSystem(Reseal=Audit) -> audit
+           mode, so by the time post-install.ps1 runs the file is released and
+           deletable. Part 2 (delete C:\pagefile.sys + re-arm automatic
+           management for clones) is at the end of post-install.ps1.
+           Without this, a RAM-sized pagefile.sys (GBs) is captured into the
+           golden image, inflating the DV, the containerDisk push, and every
+           Trilio backup of every clone. -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v AutomaticManagedPagefile /t REG_DWORD /d 0 /f</Path>
+          <Description>Disable automatic pagefile management</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v PagingFiles /t REG_MULTI_SZ /d "" /f</Path>
+          <Description>Remove all paging files</Description>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
   </settings>
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
