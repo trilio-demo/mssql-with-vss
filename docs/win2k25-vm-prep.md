@@ -180,17 +180,35 @@ spec:
         sysprep: { configMap: { name: win2k25-mssql-sysprep } }
 ```
 
-> **Sizing — lean lab default vs. floors.** This manifest is tuned for the
-> smallest footprint a Windows Server 2025 lab VM needs: **1 vCPU / 4 Gi /
-> 32 Gi root**, single disk.
+> **Sizing — lean lab default.** This manifest is tuned for the smallest
+> footprint a Windows Server 2025 lab VM needs: **1 vCPU / 4 Gi / 24 Gi root**.
 > - **CPU/RAM** come from the **instancetype** (`u1.medium` = 1 vCPU / 4 Gi).
 >   That's the floor for Desktop Experience; need more? Pick a bigger one
 >   (`u1.large` = 2/8, `u1.xlarge` = 4/16) here or at create time in the UI —
 >   no image rebuild required.
-> - **Root = 32 Gi is a hard floor, not a preference.** Windows Server's
->   documented minimum is 32 GB, and you **cannot** provision a clone root
->   smaller than the golden DV's virtual size (~21 Gi) — CDI clones grow,
->   never shrink below source. Don't drop this below 32 Gi.
+> - **Root = 24 Gi** (lab choice, 2026-08-22). Two independent floors apply:
+>   CDI **cannot** provision a clone root smaller than the golden DV's virtual
+>   size (clones grow, never shrink below source) — that's **20 Gi** for the
+>   lean golden. Microsoft separately documents 32 GB as the Windows Server
+>   minimum; 24 Gi sits below that **deliberately**, and is verified working
+>   for this lab's Engine-only SQL install. Raise it if you add SSMS or expect
+>   sustained Windows Updates.
+> - **C: grows itself.** A clone provisioned larger than the golden gets the
+>   extra capacity as a raw tail; Windows does **not** claim it automatically.
+>   `unattend.xml` **Order 6** extends C: into it on first boot (no-op when
+>   clone size == golden size). Measured on a 24 Gi clone of the 20 Gi golden:
+>   **C: 23.89 GB, 9.84 GB free**.
+>   > ⚠️ This only works because the golden ships with **no trailing WinRE
+>   > recovery partition** — Windows Setup appends one by default, and it
+>   > leaves the free space non-contiguous with C:, permanently stranding it
+>   > (a pre-fix clone sat at C: 19.1 GB with 4 GB unusable). The golden build
+>   > removes it; see `golden-image-build.md`.
+> - **Pagefile.** The golden ships **pagefile-less on purpose** (it would
+>   otherwise bloat the image and every backup of every clone). `unattend.xml`
+>   **Order 7** re-enables automatic management, and Windows creates the file
+>   on the next boot — a ~1.4 GB managed pagefile on a 4 Gi VM. If you ever
+>   need to confirm it, query `Win32_PageFileUsage`; `Test-Path C:\pagefile.sys`
+>   returns **False even when it exists** (protected system file).
 >
 > **Adding SQL Server?** SQL needs a second disk for its data/log/backup files
 > (→ `D:`). Add a `win2k25-mssql-data` blank `dataVolumeTemplate` (10 Gi is

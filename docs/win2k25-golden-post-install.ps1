@@ -150,13 +150,20 @@ Remove-Item 'C:\Windows\Temp\lp.txt','C:\Windows\Temp\delrec.txt' -Force -ErrorA
 # back in the `specialize` pass, before this script starts measuring, so a delta
 # reads as "~0 reclaimed" even when everything worked.
 $c = Get-PSDrive C
+# Detect the pagefile via WMI, NOT Test-Path. `Test-Path C:\pagefile.sys`
+# returns False even when the pagefile exists -- it is a protected system file --
+# so a Test-Path check silently reports "absent - correct" and would hide a
+# slimming failure (verified 2026-08-22: Test-Path False while
+# Win32_PageFileUsage reported C:\pagefile.sys at 1408 MB).
+$pf = (Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue |
+       Select-Object -First 1 -ExpandProperty AllocatedBaseSize)
 @(
   "golden build: win2k25 (Server 2025 Standard, Desktop Experience)"
   "slimming pass ran  : $(Get-Date -Format s)"
   "C: size            = $([math]::Round(($c.Used + $c.Free)/1GB,2)) GiB"
   "C: used            = $([math]::Round($c.Used/1GB,2)) GiB"
   "C: free            = $([math]::Round($c.Free/1GB,2)) GiB"
-  "pagefile.sys       = $(if (Test-Path 'C:\pagefile.sys') { 'PRESENT - slimming FAILED' } else { 'absent - correct' })"
+  "pagefile           = $(if ($pf) { 'PRESENT ' + $pf + ' MB - slimming FAILED' } else { 'absent - correct' })"
   "recovery partitions= $recLeft (expected 0)"
   "recovery removed   = $($recNums.Count)"
 ) | Set-Content -Path 'C:\golden-build-report.txt' -Encoding ASCII
