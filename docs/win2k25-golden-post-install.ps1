@@ -168,6 +168,20 @@ $pf = (Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue |
   "recovery removed   = $($recNums.Count)"
 ) | Set-Content -Path 'C:\golden-build-report.txt' -Encoding ASCII
 
+# --- Deterministic timezone baseline: UTC --------------------------------
+# Windows Setup defaults a fresh en-US image to Pacific. unattend.xml then sets
+# Eastern during first boot, so a clone silently shifts timezone mid-boot --
+# which is exactly what made the v4 SetupComplete log unreadable (a 1-minute
+# run stamped across two zones looked like 3 hours) and cost real time chasing
+# a "clock skew" that did not exist. The guest's UTC clock is accurate from
+# boot; only the DISPLAY zone moves.
+#
+# Baselining the image at UTC makes a no-unattend clone's local time equal to
+# real time, so timestamps in logs and lab evidence are unambiguous by default.
+# VMs that want a local zone still get it -- unattend.xml sets Eastern in
+# specialize and overrides this.
+tzutil.exe /s "UTC"
+
 # =========================================================================
 # SetupComplete.cmd -- make the golden self-sufficient for UI-created VMs
 # =========================================================================
@@ -204,40 +218,68 @@ $pf = (Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue |
 $setupComplete = @'
 @echo off
 REM Baked into the win2k25 golden image. Runs once, as SYSTEM, on first boot
-REM of a clone -- with or without an unattend.xml attached.
+REM of a clone -- but ONLY AFTER OOBE COMPLETES. With no unattend attached the
+REM clone parks at OOBE waiting for interactive input, and nothing below runs
+REM until someone clicks through it (verified 2026-08-22: OOBEInProgress=1,
+REM msoobe/oobeldr/windeploy running, log absent).
+REM
+REM Timestamps are UTC ON PURPOSE. A previous revision logged local time and
+REM became unreadable: unattend.xml switches the timezone during first boot, so
+REM "start" and "finish" were stamped in different zones and a 1-minute run
+REM looked like a 3-hour one. The guest's UTC clock is accurate from boot
+REM (measured: 11 s drift) -- there is no clock skew, only timezone display.
 REM Log: C:\Windows\Temp\setupcomplete.log
 set LOG=C:\Windows\Temp\setupcomplete.log
-echo [%DATE% %TIME%] SetupComplete starting >> "%LOG%" 2>&1
+call :utc
+echo [%STAMP%] SetupComplete starting >> "%LOG%" 2>&1
 
-REM --- 1. NIC MTU 1400 -- MUST precede activation ------------------------
+REM --- 1. NIC MTU 1400 ---------------------------------------------------
 REM Windows ignores the DHCP-advertised MTU and stays at 1500. On a 1400 OVN
-REM overlay that black-holes large HTTPS transfers, so slmgr /ato below fails
-REM with 0x80072EE2 and the clone silently keeps the 10-day grace period.
+REM overlay that black-holes large HTTPS transfers.
+REM NOTE: this BOUNCES the interface, which is why activation below must wait
+REM for the default route to come back rather than firing immediately.
 netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent >> "%LOG%" 2>&1
 
 REM --- 2. Re-enable automatic pagefile management -------------------------
 REM The image ships pagefile-less on purpose. Windows creates the file at the
 REM NEXT boot, not on this write, so the image stays lean either way.
+REM This step has no network or disk dependency and is the one that reliably
+REM works this early -- it is the whole reason SetupComplete.cmd exists.
 powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$cs = Get-CimInstance Win32_ComputerSystem; Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile=$true}" >> "%LOG%" 2>&1
 
 REM --- 3. Extend C: into any unallocated tail -----------------------------
-REM A clone on a larger root than the golden gets the extra space as a raw
-REM tail; Windows never claims it automatically. `extend` with no size takes
-REM all CONTIGUOUS free space -- which only exists because the bake removed
-REM the trailing WinRE recovery partition. diskpart is used rather than
-REM Resize-Partition: Get-Partition -DiskNumber returns nothing in this
-REM non-interactive SYSTEM context. No-op when clone size == golden size.
->C:\Windows\Temp\ext.txt echo select volume c
+REM `rescan` is REQUIRED and was missing in v4: this runs ~3 minutes after the
+REM VM is created, before Windows has re-read the enlarged disk's GPT, so
+REM diskpart reported "not enough usable free space" on a clone that genuinely
+REM had 4 GB free. rescan forces the re-read first.
+REM Only works because the bake removed the trailing WinRE partition, which
+REM would otherwise leave the free space non-contiguous with C:.
+REM No-op when clone root == golden size.
+>C:\Windows\Temp\ext.txt echo rescan
+>>C:\Windows\Temp\ext.txt echo select volume c
 >>C:\Windows\Temp\ext.txt echo extend
 diskpart /s C:\Windows\Temp\ext.txt >> "%LOG%" 2>&1
 del /q C:\Windows\Temp\ext.txt
 
 REM --- 4. Activate the evaluation ----------------------------------------
-REM Unlocks the full ~180-day eval. Without it the clone sits on the 10-day
-REM activate-by deadline. Harmless no-op where *.sls.microsoft.com is blocked.
-cscript //nologo C:\Windows\System32\slmgr.vbs /ato >> "%LOG%" 2>&1
+REM Unlocks the full ~180-day eval; without it the clone sits on the 10-day
+REM activate-by deadline. v4 failed here with 0x80072EFE
+REM (ERROR_INTERNET_CONNECTION_ABORTED) because it fired seconds after step 1
+REM bounced the NIC. So: wait for a default route, then retry.
+REM Harmless no-op where *.sls.microsoft.com is unreachable -- it just logs
+REM each attempt and gives up, leaving the 10-day grace to be resolved later.
+REM Writes progress with Write-Output, NOT Add-Content: the batch line below
+REM already redirects into %LOG%, so cmd holds that file open and a second
+REM writer hits "being used by another process" (caught 2026-08-23 -- the
+REM activation still ran, but every per-attempt diagnostic was lost).
+powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$d=(Get-Date).AddSeconds(120); while(-not (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue) -and (Get-Date) -lt $d){ Start-Sleep -Seconds 5 }; for($i=1;$i -le 6;$i++){ $o = (cscript.exe //nologo C:\Windows\System32\slmgr.vbs /ato | Out-String); Write-Output ('ato attempt ' + $i + ': ' + $o.Trim()); if($o -match 'successfully'){ break }; Start-Sleep -Seconds 20 }" >> "%LOG%" 2>&1
 
-echo [%DATE% %TIME%] SetupComplete finished >> "%LOG%" 2>&1
+call :utc
+echo [%STAMP%] SetupComplete finished >> "%LOG%" 2>&1
+exit /b 0
+
+:utc
+for /f "usebackq delims=" %%i in (`powershell.exe -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')"`) do set STAMP=%%i
 exit /b 0
 '@
 New-Item -Path 'C:\Windows\Setup\Scripts' -ItemType Directory -Force | Out-Null

@@ -93,7 +93,7 @@ spec:
       value: windows.2k25.virtio
     # Fresh name so a prior golden is never overwritten by a rebake.
     - name: baseDvName
-      value: win2k25-v4
+      value: win2k25-v5
     - name: isoDVName
       value: win2k25-iso
     # UEFI, so the modify-windows-iso-file task must run (strips the
