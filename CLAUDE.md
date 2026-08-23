@@ -104,6 +104,18 @@ credentials live in the gitignored `CLAUDE.local.md` (auto-loaded at session
 start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 
 ## Project Status
+
+> **⚠️ 2026-08-22/23 — READ FIRST.** The Portworx evidence cluster was
+> **deleted**, taking the whole lab with it. Everything below that refers to
+> that cluster (BackupPlan, Hook, SQL CREDENTIAL, `demo_db`, backups,
+> restores) is **historical**; the *findings* still stand and their evidence
+> is safe in `output/`, but the running artefacts are gone. The lab now lives
+> on a **new cluster** with **OCPv 4.22.6 + TVK 5.4.0** and a re-baked, leaner
+> golden image (**`win2k25-v5`**: 20 Gi virtual / 13.88 GiB used, pagefile-less,
+> no WinRE partition, UTC baseline, `SetupComplete.cmd` for console-created
+> VMs). Build-path changes for OCPv 4.22 are in
+> [`docs/golden-image-build.md`](docs/golden-image-build.md). Current
+> identifiers: `CLAUDE.local.md`; full detail: `docs/session-state.md`.
 - [x] Demo scope locked: **DB-only with Python write generator (inside the Windows VM)**
 - [x] Cluster locked: **the evidence cluster (Portworx)** (OCP 4.18.19, OCPv + Trilio already installed)
 - [x] Python tooling set up (pyenv 3.13.13 + uv) — driver: `pyodbc` + MS ODBC Driver 18 (added when generator is written)
@@ -176,129 +188,70 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-07-17 — WIN: engineering adopting the MSSQL lab; doc
-handoff closed out):** Engineering wants to install MSSQL in their own
-environment — the recipe docs now serve engineering, not just the sales
-track. Decisions: **don't share `CLAUDE.local.md`** (after scrubbing, nothing
-transferable remains — everything they need is in the repo) and **golden
-image stays PAT-gated** (engineering self-serves the read-PAT per
-`docs/ghcr-secret.example.yaml`). Doc audit found + fixed the one gap:
-`sqlcmd -C` was unexplained in lab-guide and missing from prep-doc § 6 verify
-commands (fails on ODBC-18 `sqlcmd` fresh installs) — baked + pushed
-(`b84494c`, `2042883`). Parked prep-doc item (a) DONE, (b)/(c) verified
-already covered; only (d)/(e) remain. **Handoff complete; nothing further
-owed to engineering on this thread.**
+**Last session (2026-08-22/23 — the PX evidence cluster was DELETED; whole lab
+rebuilt on a new cluster; golden re-baked 4× to v5):** Vince's primary lab
+cluster is gone. Rebuilt the win2k25 golden-image pipeline and the MSSQL VM on
+a **new cluster (OCP 4.22.1 / OCPv 4.22.6 / TVK 5.4.0)** — and took the chance
+to bake the image **lean** rather than right-size at clone time. Golden is now
+**20 Gi virtual / 13.88 GiB used** (old one backed up at 17.85 GiB), with no
+pagefile, no WinRE partition, and a UTC timezone baseline. Four bakes were
+needed: **every defect was found by validating on a real clone, never by
+static review.** **SQL Server install is deliberately held to next session
+(Vince).**
 
-**Prior sessions:** 07-16 — hook-sequencing repro kit (Windows-free, Fedora +
-probe Hook) validated + attached to the hook-sequence JIRA; RV-pinning
-finding OVERTURNED (live Hook executes; defect is audit-trail misreport);
-Vince committed to verifying the eventual 5.4.0 fix on the evidence VM.
-07-07..12 — Exp 5 (vTPM/EFI PVC excluded by design; recovery password
-unlocks) + Exp 6 (plain freeze/thaw sufficient) both DONE; a second
-MSSQL-interested prospect surfaced — 2 customers now care about this story.
-Detail: `docs/session-state.md`.
+**Prior sessions:** 07-17 — engineering adopting the MSSQL lab, doc handoff
+closed. 07-16 — hook-sequencing repro kit validated + attached to the JIRA;
+RV-pinning finding OVERTURNED. 07-07..12 — Exp 5 (vTPM/BitLocker) + Exp 6
+(freeze/thaw-only) DONE; 2nd MSSQL prospect surfaced. Detail:
+`docs/session-state.md`.
 
-**Context for the week:** the **feature-readiness call (week of 07-06)** on the
-partner-led re-entry (see `CLAUDE.local.md`) — check whether it already
-happened / what came out of it, since this brief predates knowing the
-outcome.
+**⚠️ Cluster reality changed — read before touching anything:** the Portworx
+evidence cluster and everything on it (BackupPlan, Hook, SQL CREDENTIAL,
+`demo_db`, Exp-6 backups) is **gone**. Prior Session-State references to it are
+historical. The consume/TopoLVM and Ceph-RBD build clusters are untouched but
+were not used this session. **One live footprint now: the new DC6 lab**
+(identifiers in `CLAUDE.local.md`; full detail in `docs/session-state.md`).
 
-**Next session** — **Experiment 7 (TVK 5.4.0 S3-streaming comparison) is
-explicitly parked — Vince confirmed nothing to do here for a couple of
-weeks (as of 2026-07-12).** Don't pick a cluster or start setup unless he
-raises it. **No Exp-5 JIRA to file** — Vince decided (2026-07-12) to hold
-it; TVK Product will document the vTPM/EFI exclusion as intentional instead
-(unrelated to the separate hook-sequence JIRA, already filed, now targeted
-for 5.4.0). `tpm-lab`/`tpm-lab-restore` torn down (2026-07-12) — Experiment
-5 is fully closed out, nothing left over. Then likely post-call
-follow-ups, plus the natural MSSQL lab continuation: enable SQL Agent + the
-5-min `BACKUP LOG TO URL` job on the evidence VM, add the pre-hook log-chain
-freshness check (follow-on steps in the cadence decision doc), then Python
-write generator → backup under load → FLR.
+**Next session — open items in priority order:**
+1. **Install SQL Server on `win2k25-mssql`** (held from this session). VM is
+   cloned from v5, fully validated, `D:` ready. **No installer source is
+   recorded anywhere in the repo** — Vince needs to supply an ISO/URL, or do
+   the install interactively over RDP as before. Old lab used **SQL Server
+   2025 Developer, named instance `MSSQLSERVER01`**.
+2. **Push `win2k25-v5` to GHCR so others can use it** — Vince approved in
+   principle, **blocked on his GHCR write PAT**. Missing on the cluster:
+   `ghcr-push` secret, `cdisk-builder` SA (+privileged SCC), 60Gi
+   `win2k25-build-scratch` PVC. Source PVC is already `volumeMode: Block` as
+   the push Job needs. Suggested tag `:2026-08-23` (replaces stale
+   `:2026-06-18`). Job manifest already in `manifests/`.
+3. **Rebuild the Trilio lab objects** — Target `minio-esx-s3` already exists
+   and is Available; retention policy present. Still need BackupPlan + the
+   `mssql-anchor-hook` (manifests in `manifests/` reference the OLD PX VM name
+   and NFS target — **both must be retargeted**).
+4. Then the carried POC work: Python write generator → backup under load →
+   FLR demo → evidence bundle → Confluence/blog.
 
-**Active lab footprints** (contexts, IPs, reach commands → `docs/session-state.md`):
-- **Evidence cluster (Portworx)** — authoritative Exp-4 evidence env (BackupPlan, SQL
-  CREDENTIAL, `demo_db` 18 rows post-Exp-6). **Now also the Sub-track 1 dev env
-  (Vince, 2026-07-04)** — PX license renewed. Verified 2026-07-04: VM Running, SQL
-  services healthy; **fixed guest MTU (1400) + activated eval (`slmgr /ato`,
-  expires 12/31/2026)**. **Also carries:** the no-hook BackupPlan + backup
-  from Experiment 6 (kept for reference; its restore ns already torn down).
-  Experiment 5's `tpm-lab`/`tpm-lab-restore` fully torn down (2026-07-12).
-- **Consume/validate cluster (LVMS/TopoLVM)** — `win2k25-mssql` **recreated via the
-  UI from `:2026-06-18`**; SSH (NodePort → PowerShell, key auth) + RDP validated,
-  **no § 5c needed**. **No SQL yet.** DataImportCron `win2k25-trilio-golden` now
-  imports `:2026-06-18` (cron spec is immutable → delete+recreate to retag).
-  sysprep ConfigMap `sysprep-win2k25-mssql-lsn0fz` exists standalone. **`D:` data
-  disk confirmed present → SQL-ready** (next-session SQL install can proceed).
-- **Build cluster (Ceph RBD)** — golden-image BUILD cluster. **`win2k25-v1` DV =
-  the sole golden** (inbox SSH, validated; old `win2k25` DV deleted — the
-  `:2026-06-16` ghcr tag is the only remaining fallback). Registry tag
-  `:2026-06-18` pushed. Pipeline `windows-efi-installer` v4.21.0 in the build ns.
-
-*Golden-image rebake → distribute → validate is DONE (2026-06-18). Below is what's left.*
-
-**Open items (priority order — MSSQL POC is the focus now):**
-0. **Verify engineering's hook-ordering fix when it lands (targeted TVK
-   5.4.0):** first against the Fedora repro kit (`repro/hook-sequencing/`
-   README defines the fixed-output oracle: POST sees `thawed`, guest-exec
-   ALLOWED, `Unfreezed` before POST start), then a full acceptance run on
-   the Windows/MSSQL evidence VM (Vince committed to this on Slack,
-   2026-07-16). Nothing to do until engineering produces a candidate build.
-1. **Experiment 7 (scoped 2026-07-09, PARKED 2026-07-12) — TVK 5.4.0
-   S3-streaming comparison vs 5.3.1 baseline.** Vince confirmed nothing to
-   do here for a couple of weeks — **do not start setup or pick a cluster
-   unless he raises it.** When resumed: decide target cluster first
-   (Portworx evidence cluster in-place upgrade vs. a separate cluster —
-   trade-off is disturbing the live Sub-track 1 env vs. rebuilding the SQL
-   VM elsewhere), then repeat the MSSQL backup/restore timing tests. **2
-   customers now interested in the MSSQL story** (see `CLAUDE.local.md`) —
-   this comparison feeds both.
-2. **Experiments 5 & 6: DONE.** Exp 5 (BitLocker/vTPM) Confluence article
-   shared 2026-07-08; Exp 6 (freeze/thaw-only consistency) evidence
-   written 2026-07-09, restore ns already torn down. **No JIRA to file for
-   Exp 5** — Vince decided 2026-07-12 to hold it; TVK Product will
-   document the vTPM/EFI exclusion as intentional instead (see
-   `output/exp5-tpm-bitlocker-20260708.md` Follow-ups section — do not
-   confuse with the separate, already-filed hook-sequence JIRA now
-   targeted for 5.4.0). `tpm-lab`/`tpm-lab-restore` torn down (2026-07-12)
-   — both experiments are fully closed out, nothing left over.
-3. **Lab continuation on the evidence VM:** SQL Agent 5-min `BACKUP LOG TO URL`
-   job + pre-hook log-chain freshness check (follow-on list in
-   `private-docs/log-backup-cadence-decision-20260705.md`; remember the
-   BackupPlan RV re-pin after any Hook edit).
-4. **Remaining POC tracks:** in-guest VSS component requestor ("Mechanism E";
-   deferred Q: QGA freeze/thaw alone? Note: hook POC proved post-hooks run
-   frozen — relevant to that design); restore-side hook automation; demo to
-   engineering.
-5. **Carried POC/evidence work:** Python write generator → backup under load →
-   FLR demo → BackupPlan v2 (Routes + host-rewrite) → bundle `output/` for the
-   blog agent → Confluence article + blog. (Detail in § Project Status.)
-6. **Send the customer reply + internal status email** — drafts at
-   `private-docs/2026-06-01-*.md`, never sent (may be superseded by the
-   partner-call track).
-7. **(Demoted) Install SQL Server on the consume `win2k25-mssql`** — was the
-   Sub-track 1 gate, but the hook work moved to the evidence cluster; still
-   useful for a second-cluster validation env.
-8. **(Lower — golden-image infra, deprioritized):** lean golden image; 2022
-   golden recipe port-based-rule fix (`collateral/configmap-win2k22-golden-v2.yaml`).
-
-   *Optional cleanup: delete the superseded `:2026-06-16` ghcr tag. The 60Gi
-   `win2k25-build-scratch` PVC (build cluster) is reusable — keep for next export.*
+**Known gap carried forward (accepted, not a bug):** `SetupComplete.cmd` only
+runs **after OOBE completes**, so a console-created VM with no unattend parks
+at OOBE; after clicking through it gets 3 of 4 fixes automatically (pagefile,
+MTU, activation) but the **C: extend stays manual**. Chasing it costs another
+~50-min bake for cosmetic disk space — deliberately deferred.
 
 **Continuity reminders:**
-- **Be deliberate about which cluster you touch** — three live footprints on
-  different storage backends. The evidence cluster is now also the Sub-track 1
-  dev env (Vince, 2026-07-04).
-- **⚠️ Retention pruned the historical backups:** the latest-5 policy deleted
-  backup #1 (`2phcr`) and the Exp-4 backup (`kcxdl`) from the target when this
-  session's 5 hook-POC backups landed. Exp-4 *evidence* (files, LSNs) is safe
-  in the repo, but the restorable Exp-4 backup no longer exists.
+- **Record UTC, not local time, in lab evidence.** Guest local time shifts
+  during first boot as the timezone is applied; this caused a real
+  misdiagnosis this session (a 1-minute run looked like 3 hours).
+- **`Get-Partition -DiskNumber` returns nothing** in a non-interactive SYSTEM
+  context — use `diskpart` for guest disk work driven via QGA/SetupComplete.
+- **Validate golden changes on an actual clone.** Three separate defects this
+  session were invisible to static review and only appeared on a booted VM.
 - **Announce backup/long-op launches loudly** (CR name, purpose, ETA) — Vince
   watches the Trilio UI in parallel (memory: `feedback_announce_cluster_runs`).
+- **TVK 5.4.0 is now in play** — it has a `filerecoveryvms` CRD (native VM FLR,
+  new since 5.3.1) and is the **Experiment 7** comparison target, so that
+  parked experiment is now cheap to pick up.
 - Real cluster/VM/customer identifiers live in the gitignored `CLAUDE.local.md`
-  (auto-loaded) + `docs/session-state.md` — refer to them here by role-label
-  only. Caveat: prior commits already exposed some identifiers in public git
-  history (scrubbing forward ≠ scrubbing the past).
+  (auto-loaded) + `docs/session-state.md` — role-labels only in this file.
 
 Full archaeology: `docs/session-state.md` — consult when prior-thread depth,
 decision reasoning, or ruled-out paths are needed.

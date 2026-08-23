@@ -44,7 +44,7 @@ spec:
         source:
           pvc:
             namespace: win-golden-build
-            name: win2k25-v4
+            name: win2k25-v5
         storage:
           storageClassName: ocs-storagecluster-ceph-rbd-virtualization
           resources:
