@@ -62,19 +62,12 @@ spec:
     pipeline: 3h0m0s
   taskRunTemplate:
     serviceAccountName: pipeline
+  # Local, vendored pipeline -- NOT the hub resolver. The upstream catalog
+  # pipeline hardcodes a 20Gi root with no parameter to change it, and we need
+  # 32Gi so CDI enforces the clone floor. See
+  # manifests/win2k25-golden-pipeline-32gi.yaml (apply it first).
   pipelineRef:
-    resolver: hub
-    params:
-      - name: catalog
-        value: redhat-pipelines
-      - name: type
-        value: artifact
-      - name: kind
-        value: pipeline
-      - name: name
-        value: windows-efi-installer
-      - name: version
-        value: "4.22.6"
+    name: windows-efi-installer-32gi
   params:
     # Short-lived Microsoft eval-center URL -- injected via envsubst, never committed.
     - name: winImageDownloadURL
@@ -93,7 +86,7 @@ spec:
       value: windows.2k25.virtio
     # Fresh name so a prior golden is never overwritten by a rebake.
     - name: baseDvName
-      value: win2k25-v5
+      value: win2k25-v6
     - name: isoDVName
       value: win2k25-iso
     # UEFI, so the modify-windows-iso-file task must run (strips the
