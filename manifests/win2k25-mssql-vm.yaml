@@ -37,19 +37,30 @@ spec:
     name: windows.2k25.virtio
     kind: VirtualMachineClusterPreference
   dataVolumeTemplates:
-    # Root: cross-namespace clone of the golden DV built by the pipeline.
+    # Root: clone from the CATALOG BOOT SOURCE, not from the build namespace.
+    # Proven 2026-08-23 in a fresh namespace with NO cdi-clone-source RBAC at all
+    # -- cloning from openshift-virtualization-os-images is the supported path, so
+    # manifests/cdi-clone-source-rbac.yaml is NOT needed for this manifest. (That
+    # RBAC is only for cloning directly out of the build namespace.) It is also
+    # snapshot-backed, so the clone completes in seconds rather than minutes.
     - metadata:
         name: win2k25-mssql-root
       spec:
-        source:
-          pvc:
-            namespace: win-golden-build
-            name: win2k25-v5
+        sourceRef:
+          kind: DataSource
+          name: win2k25-trilio-golden
+          namespace: openshift-virtualization-os-images
         storage:
           storageClassName: ocs-storagecluster-ceph-rbd-virtualization
           resources:
             requests:
-              storage: 24Gi
+              # 32Gi, not 24Gi. A 24 Gi root survives first boot and then fills:
+              # Windows Update pulled ~6.2 GB into SoftwareDistribution and grew
+              # WinSxS to 10.8 GB within hours, leaving <1 GB free (measured
+              # 2026-08-25). Microsoft documents 32 GB as the Server minimum and
+              # that turns out to be right. Also disable Windows Update in the
+              # guest for a lab VM -- see docs/win2k25-vm-prep.md.
+              storage: 32Gi
     # SQL data disk -> becomes D: via unattend FirstLogonCommands Order 1.
     - metadata:
         name: win2k25-mssql-data
