@@ -126,6 +126,42 @@ cluster. See the ready manifest in
 > two keys of the build ConfigMap consumed by the `windows-efi-installer`
 > pipeline (virtio + QGA + OpenSSH + host-key wipe).
 
+#### Creating a VM from it in the console (OpenShift 4.22)
+
+The navigation changed in 4.22 and the old path is gone — **there is no
+"Catalog" item under Virtualization any more.** Creating a VM is one unified
+wizard, and the step that matters is the very first choice:
+
+```
+Virtualization -> VirtualMachines -> Create VirtualMachine
+  1 Deployment details -> "Custom configuration (default)"   <-- NOT "Create from Template"
+  2 Guest OS           -> Microsoft Windows + windows.2k25.virtio
+  3 Boot source        -> win2k25-trilio-golden
+  4 Compute resources  -> pre-filled from the DataSource labels
+  5 Customization      -> optionally attach unattend.xml as a sysprep volume
+  6 Review and create
+```
+
+Two traps in that sequence, both of which look like "the image isn't there":
+
+- **"Create from Template" is a dead end for a custom image.** Templates bind to
+  *fixed* DataSource names (`windows2k25-server-medium` → `win2k25`), so a
+  distinctly-named boot source can never appear there. On a cluster where the
+  stock `win2k25` was never populated, every Windows template also shows a
+  `PVC` boot source with no "Source available" badge — so ticking the
+  "boot source available" filter hides all of them and the list looks empty of
+  Windows entirely.
+- **The step-2 dropdown is not the image list.** It lists KubeVirt *preferences*
+  (`windows.2k25`, `windows.2k25.virtio`, …). The bootable volume is chosen at
+  **step 3**. Pick the preference that matches the DataSource's
+  `instancetype.kubevirt.io/default-preference` label — `windows.2k25.virtio`
+  here — both because the wizard filters on it and because `.virtio` gives
+  virtio disk/NIC, which is what the golden has drivers for.
+
+The **Bootable volumes** page under Virtualization lists the volume but has no
+create action — it is a management view, so finding your image there and no
+"create" button is expected, not a fault.
+
 > **Why the catalog sometimes clones the "wrong" (old) image:** a template's
 > default disk is a **DataSource**, fed by either a **DataImportCron** or a
 > **static PVC**. If the cluster's `win2k25` DataSource is a stale static PVC
@@ -165,7 +201,7 @@ spec:
       source: { pvc: { namespace: <your-namespace>, name: win2k25 } }   # clone the seeded golden DV
       storage:
         storageClassName: <wffc-storageclass>
-        resources: { requests: { storage: 32Gi } }   # ≥32Gi — see sizing note
+        resources: { requests: { storage: 32Gi } }   # 32Gi floor — see sizing note
   template:
     spec:
       domain:
@@ -180,19 +216,37 @@ spec:
         sysprep: { configMap: { name: win2k25-mssql-sysprep } }
 ```
 
-> **Sizing — lean lab default.** This manifest is tuned for the smallest
-> footprint a Windows Server 2025 lab VM needs: **1 vCPU / 4 Gi / 24 Gi root**.
+> **Sizing.** This manifest is tuned for the smallest
+> footprint a Windows Server 2025 lab VM needs: **1 vCPU / 4 Gi / 32 Gi root**.
 > - **CPU/RAM** come from the **instancetype** (`u1.medium` = 1 vCPU / 4 Gi).
 >   That's the floor for Desktop Experience; need more? Pick a bigger one
 >   (`u1.large` = 2/8, `u1.xlarge` = 4/16) here or at create time in the UI —
 >   no image rebuild required.
-> - **Root = 24 Gi** (lab choice, 2026-08-22). Two independent floors apply:
->   CDI **cannot** provision a clone root smaller than the golden DV's virtual
->   size (clones grow, never shrink below source) — that's **20 Gi** for the
->   lean golden. Microsoft separately documents 32 GB as the Windows Server
->   minimum; 24 Gi sits below that **deliberately**, and is verified working
->   for this lab's Engine-only SQL install. Raise it if you add SSMS or expect
->   sustained Windows Updates.
+> - **Root = 32 Gi. Do not go lower.** An earlier revision of this doc said
+>   24 Gi was fine and "verified working" — that was **wrong**, and the way it
+>   was wrong is worth knowing. 24 Gi survives first boot happily; it dies a
+>   few hours later, because **Windows Update runs on its own**. Measured on
+>   two independent VMs (2026-08-25): `SoftwareDistribution` grew to
+>   **6.23 GB**, `WinSxS` to **10.82 GB** — about **+9.6 GB over the golden's
+>   13.88 GiB baseline in ~4 hours** — leaving **under 1 GB free** and blocking
+>   the SQL Server install outright. Microsoft documents 32 GB as the Windows
+>   Server minimum and that figure is correct; treat it as a floor, not a
+>   suggestion. (CDI imposes a second, lower floor: a clone can never be
+>   smaller than the golden's virtual size.)
+> - **Disable Windows Update on a lab VM.** Beyond the disk, an image whose
+>   footprint drifts by ~10 GB unbidden makes backup sizes and timings
+>   meaningless — which matters if the VM is producing evidence. Note this is a
+>   deliberate security trade-off on an internet-connected VM; it suits a
+>   short-lived lab guest, not a production one.
+>   ```powershell
+>   reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f
+>   reg add "HKLM\SYSTEM\CurrentControlSet\Services\wuauserv" /v Start /t REG_DWORD /d 4 /f
+>   Get-ScheduledTask -TaskPath "\Microsoft\Windows\UpdateOrchestrator\*" | Disable-ScheduledTask
+>   # reclaim what it already downloaded:
+>   Remove-Item "C:\Windows\SoftwareDistribution\Download\*" -Recurse -Force -ErrorAction SilentlyContinue
+>   ```
+>   `Set-Service wuauserv -StartupType Disabled` alone does **not** hold — the
+>   Update Medic service reverts it. The policy key plus `Start=4` does.
 > - **C: grows itself.** A clone provisioned larger than the golden gets the
 >   extra capacity as a raw tail; Windows does **not** claim it automatically.
 >   `unattend.xml` **Order 6** extends C: into it on first boot (no-op when
