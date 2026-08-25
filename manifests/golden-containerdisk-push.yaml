@@ -47,7 +47,7 @@ spec:
             - name: REGISTRY_IMAGE
               value: "ghcr.io/trilio-demo/win2k25-golden"
             - name: IMAGE_TAG
-              value: "2026-06-18"            # <<< EDIT per rebake
+              value: "2026-08-25"            # <<< EDIT per rebake
           command: ["/bin/bash", "-c"]
           args:
             - |
@@ -69,7 +69,15 @@ spec:
               df -h /work
               echo "=== push (retries for the occasional http2 drop) ==="
               $B push --retry 10 --retry-delay 20s "${REGISTRY_IMAGE}:${IMAGE_TAG}"
-              echo "=== DONE: ${REGISTRY_IMAGE}:${IMAGE_TAG} ==="
+              # Also publish a MOVING tag. The dated tag is what consumers pin
+              # (a DataImportCron on a dated tag is effectively import-once, so
+              # nobody's cluster silently re-imports a new golden underneath
+              # them). :latest exists so a cluster that WANTS auto-refresh can
+              # point its cron at it and let the daily digest poll pick up each
+              # rebake. Retag locally rather than rebuilding -- same digest.
+              $B tag "${REGISTRY_IMAGE}:${IMAGE_TAG}" "${REGISTRY_IMAGE}:latest"
+              $B push --retry 10 --retry-delay 20s "${REGISTRY_IMAGE}:latest"
+              echo "=== DONE: ${REGISTRY_IMAGE}:${IMAGE_TAG} and :latest ==="
           volumeDevices:
             - name: winsrc
               devicePath: /dev/winsrc
@@ -82,7 +90,7 @@ spec:
       volumes:
         - name: winsrc
           persistentVolumeClaim:
-            claimName: win2k25-v1            # <<< EDIT per rebake (source golden DV/PVC, Block mode)
+            claimName: win2k25-v6            # <<< EDIT per rebake (source golden DV/PVC, Block mode)
         - name: work
           persistentVolumeClaim:
             claimName: win2k25-build-scratch
