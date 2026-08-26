@@ -26,8 +26,15 @@
 # NOTE: DataImportCron spec is IMMUTABLE -- retagging means DELETE AND RECREATE:
 #   oc delete dataimportcron win2k25-trilio-golden -n openshift-virtualization-os-images
 #   oc apply -f manifests/win2k25-dataimportcron.yaml
-# Deleting the cron also garbage-collects the DataSource and its snapshot, so any
-# VM mid-clone from it will fail -- do this when nothing is provisioning.
+#
+# This is LESS disruptive than it sounds -- measured 2026-08-25, contradicting an
+# earlier note here that claimed otherwise. Deleting the cron does NOT
+# immediately garbage-collect the managed DataSource or its VolumeSnapshot: both
+# survive, the DataSource stays Ready pointing at the OLD snapshot for the entire
+# duration of the new import (~10 min), and only cuts over once the new image is
+# ready. So VMs can keep being provisioned from the boot source throughout a
+# retag. `garbageCollect: Outdated` + `importsToKeep: 2` then retire the old
+# snapshot afterwards.
 #
 # The registry also carries a moving `:latest` tag pointing at the same digest.
 # This cron deliberately pins the DATED tag: with a dated tag the daily poll is
