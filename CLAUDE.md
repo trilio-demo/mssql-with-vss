@@ -188,59 +188,73 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-08-22/23 — the PX evidence cluster was DELETED; whole lab
-rebuilt on a new cluster; golden re-baked 4× to v5):** Vince's primary lab
-cluster is gone. Rebuilt the win2k25 golden-image pipeline and the MSSQL VM on
-a **new cluster (OCP 4.22.1 / OCPv 4.22.6 / TVK 5.4.0)** — and took the chance
-to bake the image **lean** rather than right-size at clone time. Golden is now
-**20 Gi virtual / 13.88 GiB used** (old one backed up at 17.85 GiB), with no
-pagefile, no WinRE partition, and a UTC timezone baseline. Four bakes were
-needed: **every defect was found by validating on a real clone, never by
-static review.** **SQL Server install is deliberately held to next session
-(Vince).**
+**Last session (2026-08-25/27 — golden v6 at 32Gi published to GHCR; UI path
+proven; new access skill; Confluence article shipped + presented):** Finished
+the rebuild started 08-22. Golden is now **`win2k25-v6` at 32 Gi**, published as
+`ghcr.io/trilio-demo/win2k25-golden:2026-08-25` **and `:latest`**, and consumed
+via a catalog boot source. **The 32 Gi floor is now enforced by CDI, not by a
+doc** — a 24Gi clone is refused outright. Vince proved the console path himself
+and **presented the Confluence article to the team**. **SQL Server was
+deliberately held all session and is the main thing still outstanding.**
 
-**Prior sessions:** 07-17 — engineering adopting the MSSQL lab, doc handoff
-closed. 07-16 — hook-sequencing repro kit validated + attached to the JIRA;
-RV-pinning finding OVERTURNED. 07-07..12 — Exp 5 (vTPM/BitLocker) + Exp 6
-(freeze/thaw-only) DONE; 2nd MSSQL prospect surfaced. Detail:
+**Prior sessions:** 08-22/23 — PX cluster deleted, whole lab rebuilt on the new
+cluster, golden re-baked 4× to v5. 07-17 — engineering adopted the MSSQL lab.
+07-16 — hook-sequencing repro kit + RV-pinning finding overturned. Detail:
 `docs/session-state.md`.
 
-**⚠️ Cluster reality changed — read before touching anything:** the Portworx
-evidence cluster and everything on it (BackupPlan, Hook, SQL CREDENTIAL,
-`demo_db`, Exp-6 backups) is **gone**. Prior Session-State references to it are
-historical. The consume/TopoLVM and Ceph-RBD build clusters are untouched but
-were not used this session. **One live footprint now: the new DC6 lab**
-(identifiers in `CLAUDE.local.md`; full detail in `docs/session-state.md`).
+**Next session — in priority order:**
+1. **Install SQL Server on `win2k25-mssql`.** The VM is ready: 32 Gi root with
+   13+ GB free, Windows Update disabled, SSH (32120) + RDP (30389) live.
+   **Blocked only on an installer source — no ISO/URL is recorded anywhere in
+   the repo.** Vince needs to supply one or install interactively over RDP. Old
+   lab used **SQL Server 2025 Developer, named instance `MSSQLSERVER01`**.
+2. **Retarget the Trilio manifests.** `manifests/backupplan.yaml` and
+   `hook-mssql-anchor.yaml` still reference the **deleted PX VM name** and the
+   **old NFS target**. Both need pointing at `win2k25-mssql` +
+   Target **`minio-esx-s3`** (already Available; `trilio-latest-retention-policy`
+   present). Nothing Trilio-side has been built on this cluster yet.
+3. **Then the carried POC work:** Python write generator → backup under load →
+   FLR demo → evidence bundle.
 
-**Next session — open items in priority order:**
-1. **Install SQL Server on `win2k25-mssql`** (held from this session). VM is
-   cloned from v5, fully validated, `D:` ready. **No installer source is
-   recorded anywhere in the repo** — Vince needs to supply an ISO/URL, or do
-   the install interactively over RDP as before. Old lab used **SQL Server
-   2025 Developer, named instance `MSSQLSERVER01`**.
-2. **Push `win2k25-v5` to GHCR so others can use it** — Vince approved in
-   principle, **blocked on his GHCR write PAT**. Missing on the cluster:
-   `ghcr-push` secret, `cdisk-builder` SA (+privileged SCC), 60Gi
-   `win2k25-build-scratch` PVC. Source PVC is already `volumeMode: Block` as
-   the push Job needs. Suggested tag `:2026-08-23` (replaces stale
-   `:2026-06-18`). Job manifest already in `manifests/`.
-3. **Rebuild the Trilio lab objects** — Target `minio-esx-s3` already exists
-   and is Available; retention policy present. Still need BackupPlan + the
-   `mssql-anchor-hook` (manifests in `manifests/` reference the OLD PX VM name
-   and NFS target — **both must be retargeted**).
-4. Then the carried POC work: Python write generator → backup under load →
-   FLR demo → evidence bundle → Confluence/blog.
+**Parked, with Vince's explicit agreement — do not start unprompted:**
+- **Second Confluence article** (VM creation from the boot source: 4.22 wizard
+  walkthrough, sizing, `unattend.xml` sysprep volume, disabling Windows Update).
+  Material already exists in `docs/win2k25-vm-prep.md`. The shipped article's
+  "Related" section points at it as a **dead link** — decide whether to write it
+  or drop that section.
+- **GHCR service-account PAT** (machine user; peers self-serve their own read PAT
+  for now). Reasoning recorded in § Project Status.
+- **Description optimizer** for the `kubevirt-vm-access` skill — run it if the
+  skill under-fires, or before sharing via `share-skill-with-team`.
+- **Experiment 7** (TVK 5.4.0 S3-streaming comparison). Note **5.4.0 is already
+  on this cluster**, so it is now much cheaper to pick up than when it was parked.
 
-**Known gap carried forward (accepted, not a bug):** `SetupComplete.cmd` only
-runs **after OOBE completes**, so a console-created VM with no unattend parks
-at OOBE; after clicking through it gets 3 of 4 fixes automatically (pagefile,
-MTU, activation) but the **C: extend stays manual**. Chasing it costs another
-~50-min bake for cosmetic disk space — deliberately deferred.
+**Known gaps carried forward (accepted, not bugs):**
+- **`RealTimeIsUniversal=1` is NOT baked into the golden.** Verified as the fix
+  for the ~4 h boot-time clock skew (KubeVirt presents the RTC as UTC; Windows
+  reads it as local once a non-UTC timezone is applied; w32time corrects it in
+  ~74 s). **Top candidate for whatever the next bake is** — not worth a bake on
+  its own.
+- **`SetupComplete.cmd`'s C: extend still fails** (runs ~90 s in, before the GPT
+  is re-read). Harmless now that the golden is baked full-size, and
+  `unattend.xml` Order 6 covers the larger-root case.
+- **`SetupComplete.cmd` only runs after OOBE**, so a console-created VM with no
+  unattend still stops at OOBE first.
 
 **Continuity reminders:**
 - **Record UTC, not local time, in lab evidence.** Guest local time shifts
-  during first boot as the timezone is applied; this caused a real
-  misdiagnosis this session (a 1-minute run looked like 3 hours).
+  during first boot as the timezone is applied, AND the guest genuinely boots
+  ~4 h off for the first ~74 s (see the RealTimeIsUniversal gap above). Both
+  caused real misdiagnoses.
+- **Validate golden/image changes on an actual booted clone, and prefer
+  measuring over reasoning.** Across the rebuild, *five* separate claims that
+  survived review were falsified by measurement: 24 Gi being "verified working",
+  `Test-Path` detecting a pagefile, "there is no clock skew", a DataImportCron
+  retag being disruptive, and a NodePort Service reaching a bridged VM. Assume
+  the same of any new claim before it goes in a shareable doc.
+- **Vince's access services on lab VMs are his — never delete them during
+  cleanup**, and offer SSH/RDP when a task needs human eyes on a guest
+  (memory: `project_lab_ssh_key`).
 - **`Get-Partition -DiskNumber` returns nothing** in a non-interactive SYSTEM
   context — use `diskpart` for guest disk work driven via QGA/SetupComplete.
 - **Validate golden changes on an actual clone.** Three separate defects this
