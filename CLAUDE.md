@@ -188,14 +188,18 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-08-25/27 — golden v6 at 32Gi published to GHCR; UI path
-proven; new access skill; Confluence article shipped + presented):** Finished
-the rebuild started 08-22. Golden is now **`win2k25-v6` at 32 Gi**, published as
-`ghcr.io/trilio-demo/win2k25-golden:2026-08-25` **and `:latest`**, and consumed
-via a catalog boot source. **The 32 Gi floor is now enforced by CDI, not by a
-doc** — a 24Gi clone is refused outright. Vince proved the console path himself
-and **presented the Confluence article to the team**. **SQL Server was
-deliberately held all session and is the main thing still outstanding.**
+**Last session (2026-08-25/28 — golden v6 published; article presented, then
+consumed by Support and gap-fixed):** Finished the rebuild started 08-22. Golden
+is **`win2k25-v6` at 32 Gi**, published as
+`ghcr.io/trilio-demo/win2k25-golden:2026-08-25` **and `:latest`**, consumed via a
+catalog boot source. **The 32 Gi floor is enforced by CDI, not by a doc** — a
+24Gi clone is refused outright. Vince proved the console path, **presented the
+Confluence article to the team (08-27)**, and Support hit it the next day: the
+article never mentioned that a **private GHCR package needs an explicit access
+grant** on top of a `read:packages` token. Fixed same day (grant step first, plus
+a `skopeo inspect` pre-flight). **Vince is now a `trilio-demo` admin** and will
+grant Sachin Maurya once he accepts the org invite. **SQL Server was deliberately
+held all session and is the main thing still outstanding.**
 
 **Prior sessions:** 08-22/23 — PX cluster deleted, whole lab rebuilt on the new
 cluster, golden re-baked 4× to v5. 07-17 — engineering adopted the MSSQL lab.
@@ -222,6 +226,12 @@ cluster, golden re-baked 4× to v5. 07-17 — engineering adopted the MSSQL lab.
   Material already exists in `docs/win2k25-vm-prep.md`. The shipped article's
   "Related" section points at it as a **dead link** — decide whether to write it
   or drop that section.
+- **Whether org-level "internal" GHCR package visibility is available.** If
+  `trilio-demo` sits under a GitHub Enterprise account it removes per-person
+  grants entirely and would have prevented the Support incident. One look at the
+  package's *Change visibility* dialog answers it. **Public was considered and
+  declined** — the image carries Windows *evaluation* media, so anonymous
+  distribution is a licensing question, and it is irreversible once mirrored.
 - **GHCR service-account PAT** (machine user; peers self-serve their own read PAT
   for now). Reasoning recorded in § Project Status.
 - **Description optimizer** for the `kubevirt-vm-access` skill — run it if the
@@ -255,6 +265,14 @@ cluster, golden re-baked 4× to v5. 07-17 — engineering adopted the MSSQL lab.
 - **Vince's access services on lab VMs are his — never delete them during
   cleanup**, and offer SSH/RDP when a task needs human eyes on a guest
   (memory: `project_lab_ssh_key`).
+- **Published Confluence pages are the source of truth, not `output/*.md`.**
+  Vince and others edit pages in place as they use them — that is the process.
+  Never regenerate the local markdown and re-paste it over a live page; hand
+  over replacement text for small fixes (memory:
+  `feedback_confluence_is_source_of_truth`).
+- **A self-service artifact is only proven when someone WITHOUT the author's
+  implicit permissions completes it.** The article looked complete until Support
+  hit a package grant the author already had.
 - **`Get-Partition -DiskNumber` returns nothing** in a non-interactive SYSTEM
   context — use `diskpart` for guest disk work driven via QGA/SetupComplete.
 - **Validate golden changes on an actual clone.** Three separate defects this
