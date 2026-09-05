@@ -1,0 +1,45 @@
+# =============================================================================
+# win2k25 golden -> catalog boot source on the TSR lab cluster (vSphere CSI)
+# =============================================================================
+# Same peer-pull pattern as manifests/win2k25-dataimportcron.yaml, retargeted:
+#   storageClassName: thin-csi   (csi.vsphere.vmware.com, the only SC here,
+#                                 default, WaitForFirstConsumer, expandable)
+# The stock `win2k25` DataSource on this cluster is the usual broken placeholder
+# (Ready=False / NotFound, no cron feeding it) -- as are win10/win11/2k16/2k19/
+# 2k22. This adds a DISTINCT `win2k25-trilio-golden` source and leaves those
+# alone.
+#
+# PREREQ: `ghcr-cdi` read secret in BOTH namespaces --
+#   openshift-virtualization-os-images  (the import DataVolume)
+#   openshift-cnv                       (the cron's digest-poll job; without it
+#                                        the poll fails CreateContainerConfigError)
+# See docs/ghcr-secret.example.yaml.
+#
+# NOTE: DataImportCron spec is IMMUTABLE -- retagging means delete + recreate.
+# =============================================================================
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataImportCron
+metadata:
+  name: win2k25-trilio-golden
+  namespace: openshift-virtualization-os-images
+  labels:
+    instancetype.kubevirt.io/default-preference: windows.2k25.virtio
+    instancetype.kubevirt.io/default-instancetype: u1.medium
+spec:
+  managedDataSource: win2k25-trilio-golden
+  # Daily digest poll; the pinned dated tag makes this effectively import-once.
+  schedule: "0 6 * * *"
+  garbageCollect: Outdated
+  importsToKeep: 2
+  template:
+    spec:
+      source:
+        registry:
+          url: "docker://ghcr.io/trilio-demo/win2k25-golden:2026-08-25"
+          secretRef: ghcr-cdi
+      storage:
+        storageClassName: thin-csi
+        resources:
+          requests:
+            # EXACTLY the golden's virtual size -- 32Gi as of win2k25-v6.
+            storage: 32Gi

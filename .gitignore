@@ -54,5 +54,9 @@ learnings.md
 # Session-state archaeology (companion to CLAUDE.md's forward-looking brief);
 # holds internal cluster identifiers, IPs, reach commands — local-only
 docs/session-state.md
-# Password-populated unattend (real lab creds) — local-only, never commit
-docs/unattend-populated.xml
+# Password-populated unattend (real lab creds) — local-only, never commit.
+# GLOB, not a fixed name: the filename has drifted in practice
+# (unattend-populated.xml, unattend-password.xml, ...) and an uncovered variant
+# holding a PlainText=true AdministratorPassword is one `git add -A` from being
+# published in a public repo. Only the sanitised docs/unattend.xml is tracked.
+docs/unattend-*.xml

@@ -188,36 +188,49 @@ start) + `docs/session-state.md`. Put new sensitive identifiers there, not here.
 archaeology (thread-by-thread detail, decisions + reasoning, ruled-out paths,
 detailed per-cluster lab state) lives in `docs/session-state.md`.*
 
-**Last session (2026-08-25/28 — golden v6 published; article presented, then
-consumed by Support and gap-fixed):** Finished the rebuild started 08-22. Golden
-is **`win2k25-v6` at 32 Gi**, published as
-`ghcr.io/trilio-demo/win2k25-golden:2026-08-25` **and `:latest`**, consumed via a
-catalog boot source. **The 32 Gi floor is enforced by CDI, not by a doc** — a
-24Gi clone is refused outright. Vince proved the console path, **presented the
-Confluence article to the team (08-27)**, and Support hit it the next day: the
-article never mentioned that a **private GHCR package needs an explicit access
-grant** on top of a `read:packages` token. Fixed same day (grant step first, plus
-a `skopeo inspect` pre-flight). **Vince is now a `trilio-demo` admin** and will
-grant Sachin Maurya once he accepts the org invite. **SQL Server was deliberately
-held all session and is the main thing still outstanding.**
+**Last session (2026-09-04 — a new cluster brought online as a Windows cluster):**
+Recon'd a **cluster Vince had not used before** — a **Trilio Site Recovery**
+cluster, *not* TVK (its control plane is deployed outside OLM, so there is no
+CSV; DRBD replication is already live on other tenants' VMs). OCP 4.20 / OCPv
+4.20, a **single vSphere-CSI storage class**, and **no usable Windows image** —
+all six stock Windows DataSources were the broken `NotFound` placeholders.
+**⚠️ Its name collides confusingly with an older lab cluster — they are
+different clusters; see the identifier key.** Imported the **win2k25 v6 golden**
+there as a boot source (~4 min, Ready, 32Gi); Vince then built a Windows SQL VM
+from it and had SSH+RDP NodePorts created, **both tested working**. Every
+`kubevirt-vm-access` trap came back clean with **no guest changes needed** —
+notably the v6 golden already ships its SSH/RDP firewall rules scoped
+`profile=Any`. **SQL Server is still not installed — on either lab VM.**
 
-**Prior sessions:** 08-22/23 — PX cluster deleted, whole lab rebuilt on the new
-cluster, golden re-baked 4× to v5. 07-17 — engineering adopted the MSSQL lab.
-07-16 — hook-sequencing repro kit + RV-pinning finding overturned. Detail:
+**Prior sessions:** 08-25/28 — golden v6 published to the registry, article
+presented and gap-fixed after Support hit a package-access grant. 08-22/23 — the
+old Portworx cluster was deleted and the whole lab rebuilt. Detail:
 `docs/session-state.md`.
 
 **Next session — in priority order:**
-1. **Install SQL Server on `win2k25-mssql`.** The VM is ready: 32 Gi root with
-   13+ GB free, Windows Update disabled, SSH (32120) + RDP (30389) live.
-   **Blocked only on an installer source — no ISO/URL is recorded anywhere in
-   the repo.** Vince needs to supply one or install interactively over RDP. Old
-   lab used **SQL Server 2025 Developer, named instance `MSSQLSERVER01`**.
-2. **Retarget the Trilio manifests.** `manifests/backupplan.yaml` and
-   `hook-mssql-anchor.yaml` still reference the **deleted PX VM name** and the
-   **old NFS target**. Both need pointing at `win2k25-mssql` +
-   Target **`minio-esx-s3`** (already Available; `trilio-latest-retention-policy`
-   present). Nothing Trilio-side has been built on this cluster yet.
-3. **Then the carried POC work:** Python write generator → backup under load →
+1. **⚠️ Rotate the registry read PAT.** It became recoverable from the
+   2026-09-04 session transcript, because the agent echoed the registry bearer
+   token — which is merely base64 of `user:PAT`. Rotation is cheap: re-run the
+   two-namespace read-secret one-liner on each cluster that has one. **Standing
+   rule: never echo a registry bearer token — print a length or fingerprint.**
+   Token details are in `CLAUDE.local.md`.
+2. **Decide whether the new cluster's DataImportCron manifest gets committed**
+   to the public repo (`manifests/tsr1-win2k25-dataimportcron.yaml`). Written
+   and working; left uncommitted because Vince was asked twice and closed the
+   session without answering. It is the vSphere-CSI sibling of the Ceph and
+   Portworx variants already tracked, so it probably belongs.
+3. **Install SQL Server** — now a choice of **two** ready Windows VMs, and
+   **still blocked on an installer source**: no ISO/URL is recorded anywhere in
+   the repo. Vince must supply one or install interactively over RDP. Old lab
+   used **SQL Server 2025 Developer, named instance `MSSQLSERVER01`**. Pick by
+   storyline: the **TSR cluster's** VM suits Site-Recovery work but **cannot
+   live-migrate** (RWO-only), while the **TVK cluster's** VM is the one the
+   MSSQL/VSS POC actually needs. Ports + names: `CLAUDE.local.md`.
+4. **Retarget the Trilio manifests** (`manifests/backupplan.yaml`,
+   `hook-mssql-anchor.yaml`) — they still reference the **deleted PX VM** and
+   the **old NFS target**. Point them at the TVK lab VM + the current MinIO
+   Target. Nothing Trilio-side exists on either current cluster.
+5. **Then the carried POC work:** Python write generator → backup under load →
    FLR demo → evidence bundle.
 
 **Parked, with Vince's explicit agreement — do not start unprompted:**
@@ -260,8 +273,15 @@ cluster, golden re-baked 4× to v5. 07-17 — engineering adopted the MSSQL lab.
   measuring over reasoning.** Across the rebuild, *five* separate claims that
   survived review were falsified by measurement: 24 Gi being "verified working",
   `Test-Path` detecting a pagefile, "there is no clock skew", a DataImportCron
-  retag being disruptive, and a NodePort Service reaching a bridged VM. Assume
-  the same of any new claim before it goes in a shareable doc.
+  retag being disruptive, and a NodePort Service reaching a bridged VM — plus
+  three golden defects invisible to static review that only appeared on a booted
+  VM. Assume the same of any new claim before it goes in a shareable doc.
+- **Never echo a registry bearer token.** A GHCR token is base64 of `user:PAT`,
+  so printing it to prove auth works leaks the credential. Verify by HTTP status;
+  print only a length or hash (memory: `feedback_never_echo_registry_tokens`).
+- **Retry QGA `guest-exec` on a fresh clone** — it flaps for ~10 min while
+  sysprep finishes, *even though* the VMI says `AgentConnected=True` (memory:
+  `project_qga_agentconnected_unreliable`).
 - **Vince's access services on lab VMs are his — never delete them during
   cleanup**, and offer SSH/RDP when a task needs human eyes on a guest
   (memory: `project_lab_ssh_key`).
@@ -275,8 +295,6 @@ cluster, golden re-baked 4× to v5. 07-17 — engineering adopted the MSSQL lab.
   hit a package grant the author already had.
 - **`Get-Partition -DiskNumber` returns nothing** in a non-interactive SYSTEM
   context — use `diskpart` for guest disk work driven via QGA/SetupComplete.
-- **Validate golden changes on an actual clone.** Three separate defects this
-  session were invisible to static review and only appeared on a booted VM.
 - **Announce backup/long-op launches loudly** (CR name, purpose, ETA) — Vince
   watches the Trilio UI in parallel (memory: `feedback_announce_cluster_runs`).
 - **TVK 5.4.0 is now in play** — it has a `filerecoveryvms` CRD (native VM FLR,
